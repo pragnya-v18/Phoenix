@@ -18,6 +18,7 @@ import { IdempotencyService } from './idempotency.js';
 import { FinancialAccountingEngine } from './financials.js';
 import {
   RecoveryCase,
+  AuditLogEntry,
   DiagnosisRecord,
   StrategyRecord,
   ComplianceEvaluation,
@@ -69,17 +70,63 @@ function parseGeminiJson<T>(rawText: string | undefined): T | null {
 // Timeout wrapper for snappy responses (max 12s per agent before fallback)
 async function callGeminiWithTimeout<T>(
   fn: () => Promise<T>,
-  timeoutMs: number = 12000
+  timeoutMs: number = 12000,
+  maxRetries: number = 3
 ): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Gemini call timed out after ${timeoutMs}ms`)), timeoutMs);
-  });
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let timer: NodeJS.Timeout;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Gemini call timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+    try {
+      const result = await Promise.race([fn(), timeoutPromise]);
+      clearTimeout(timer!);
+      return result;
+    } catch (err) {
+      clearTimeout(timer!);
+      lastError = err instanceof Error ? err : new Error(String(err));
+      const isRetryable = lastError.message.includes('429') || lastError.message.includes('503')
+        || lastError.message.includes('ECONNRESET') || lastError.message.includes('ETIMEDOUT')
+        || lastError.message.includes('timed out');
+      if (!isRetryable || attempt >= maxRetries) throw lastError;
+      const backoffMs = Math.min(1000 * Math.pow(2, attempt), 8000);
+      console.warn(`[Gemini] Retryable error (attempt ${attempt + 1}/${maxRetries}), retrying in ${backoffMs}ms:`, lastError.message);
+      await new Promise(r => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastError;
+}
 
+// Sanitize user-controlled fields before interpolating into Gemini prompts
+function sanitizeForPrompt(value: string | undefined | null, maxLength: number = 200): string {
+  if (!value) return 'N/A';
+  return value
+    .replace(/[<>'"`;\\]/g, '')
+    .replace(/\n/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
+
+// Per-case pipeline lock to prevent duplicate concurrent executions
+const pipelineLocks = new Map<string, Promise<{ updatedCase: RecoveryCase; traces: AgentExecutionTrace[] }>>();
+
+// Safe DB persistence wrappers — never throw, always log
+async function safePersistCase(recoveryCase: RecoveryCase): Promise<boolean> {
   try {
-    return await Promise.race([fn(), timeoutPromise]);
-  } finally {
-    clearTimeout(timer!);
+    await safePersistCase(recoveryCase);
+    return true;
+  } catch (err) {
+    console.error(`[AgentSupervisor] Failed to persist case ${recoveryCase.caseId}:`, err);
+    return false;
+  }
+}
+
+async function safeAuditLog(entry: Omit<import('../src/types.js').AuditLogEntry, 'id' | 'signatureHash' | 'timestamp'>): Promise<void> {
+  try {
+    await db.addAuditLog(entry);
+  } catch (err) {
+    console.warn(`[AgentSupervisor] Failed to write audit log for case ${entry.caseId}:`, err);
   }
 }
 
@@ -102,6 +149,26 @@ export class AgentSupervisor {
     updatedCase: RecoveryCase;
     traces: AgentExecutionTrace[];
   }> {
+    // Per-case lock: if a pipeline is already running for this caseId, wait for it
+    const existingLock = pipelineLocks.get(recoveryCase.caseId);
+    if (existingLock) {
+      console.warn(`[AgentSupervisor] Pipeline already running for ${recoveryCase.caseId}, waiting...`);
+      return await existingLock;
+    }
+
+    const pipelinePromise = this._runRecoveryPipeline(recoveryCase);
+    pipelineLocks.set(recoveryCase.caseId, pipelinePromise);
+    try {
+      return await pipelinePromise;
+    } finally {
+      pipelineLocks.delete(recoveryCase.caseId);
+    }
+  }
+
+  private static async _runRecoveryPipeline(recoveryCase: RecoveryCase): Promise<{
+    updatedCase: RecoveryCase;
+    traces: AgentExecutionTrace[];
+  }> {
     const traces: AgentExecutionTrace[] = [];
     const startTime = Date.now();
     const customerIdentifier = recoveryCase.customer.phone || recoveryCase.customer.id;
@@ -118,7 +185,7 @@ export class AgentSupervisor {
         switchHealthPct: outageCheck.successRate,
         reason: outageCheck.reason
       };
-      await db.upsertCase(recoveryCase);
+      await safePersistCase(recoveryCase);
 
       traces.push({
         nodeName: 'outage_guard',
@@ -131,7 +198,7 @@ export class AgentSupervisor {
         timestamp: new Date().toISOString()
       });
 
-      db.addAuditLog({
+      await safeAuditLog({
         caseId: recoveryCase.caseId,
         agentName: 'Global Outage Guard',
         action: 'OUTAGE_GUARD_WORKFLOW_PAUSED',
@@ -155,7 +222,7 @@ export class AgentSupervisor {
         remainingMinutes: cooldownCheck.remainingMinutes,
         lastCampaignAt: cooldownCheck.lastCampaignAt
       };
-      await db.upsertCase(recoveryCase);
+      await safePersistCase(recoveryCase);
 
       traces.push({
         nodeName: 'cooldown_guard',
@@ -168,7 +235,7 @@ export class AgentSupervisor {
         timestamp: new Date().toISOString()
       });
 
-      db.addAuditLog({
+      await safeAuditLog({
         caseId: recoveryCase.caseId,
         agentName: 'Cooldown Guard',
         action: 'CUSTOMER_CAMPAIGN_COOLDOWN_THROTTLED',
@@ -202,7 +269,7 @@ export class AgentSupervisor {
     const detectionResult = await this.runDetectionAgent(recoveryCase);
     recoveryCase.riskTier = detectionResult.riskTier;
     recoveryCase.status = 'DIAGNOSING';
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'detection_agent',
@@ -220,7 +287,7 @@ export class AgentSupervisor {
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Detection Agent',
       action: 'INGEST_AND_SCORE_RISK',
@@ -237,7 +304,7 @@ export class AgentSupervisor {
     const diagnosis = await this.runDiagnosisAgent(recoveryCase);
     recoveryCase.diagnosis = diagnosis;
     recoveryCase.status = 'NEGOTIATING';
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'diagnosis_agent',
@@ -250,7 +317,7 @@ export class AgentSupervisor {
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Diagnosis Agent',
       action: 'ROOT_CAUSE_FORENSICS',
@@ -266,7 +333,7 @@ export class AgentSupervisor {
     const t2 = Date.now();
     const strategy = await this.runStrategyAgent(recoveryCase, diagnosis);
     recoveryCase.strategy = strategy;
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'strategy_negotiation_agent',
@@ -279,7 +346,7 @@ export class AgentSupervisor {
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Strategy Agent',
       action: 'OPTIMIZE_RECOVERY_STRATEGY',
@@ -298,7 +365,7 @@ export class AgentSupervisor {
 
     if (compliance.requiresHumanApproval || !compliance.approved) {
       recoveryCase.status = 'PENDING_APPROVAL';
-      db.upsertCase(recoveryCase);
+      await safePersistCase(recoveryCase);
 
       traces.push({
         nodeName: 'compliance_agent',
@@ -311,7 +378,7 @@ export class AgentSupervisor {
         timestamp: new Date().toISOString()
       });
 
-      db.addAuditLog({
+      await safeAuditLog({
         caseId: recoveryCase.caseId,
         agentName: 'Compliance Agent',
         action: 'HALT_FOR_HUMAN_APPROVAL',
@@ -340,7 +407,7 @@ export class AgentSupervisor {
     // =============================================================
     const t4 = Date.now();
     recoveryCase.status = 'EXECUTING';
-    await db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     const netAmount = Math.round(recoveryCase.amount - strategy.calculatedIncentiveINR);
     
@@ -384,7 +451,7 @@ export class AgentSupervisor {
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Recovery Agent',
       action: 'DISPATCH_PAYMENT_LINK',
@@ -405,7 +472,7 @@ export class AgentSupervisor {
       reconciliationMethod: paymentLinkRes.isLiveGenerated ? 'PAYMENT_LINK_PAID_WEBHOOK' : 'SIMULATOR'
     };
     recoveryCase.status = 'RECOVERED';
-    await db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'outcome_agent',
@@ -418,7 +485,7 @@ export class AgentSupervisor {
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Outcome Agent',
       action: 'SETTLE_AND_ATTRIBUTE_RECOVERY',
@@ -455,7 +522,7 @@ Input Data:
 - Transaction Amount: ₹${recoveryCase.amount}
 - Payment Method: ${recoveryCase.sourceEvent.method}
 - Gateway Error Code: ${recoveryCase.sourceEvent.errorCode}
-- Customer Name: ${recoveryCase.customer.name}
+- Customer Name: ${sanitizeForPrompt(recoveryCase.customer.name)}
 - Customer CLV Tier: ${recoveryCase.customer.clvTier}
 - Historical Lifetime Spend: ₹${recoveryCase.customer.totalLifetimeSpendINR}
 - Historical Recoveries: ${recoveryCase.customer.historicalRecoveries}
@@ -536,7 +603,7 @@ Analyze this payment failure and return pure JSON.
 Telemetry:
 - Method: ${recoveryCase.sourceEvent.method}
 - Gateway Error: ${recoveryCase.sourceEvent.errorCode}
-- Error Description: ${recoveryCase.sourceEvent.errorDescription}
+- Error Description: ${sanitizeForPrompt(recoveryCase.sourceEvent.errorDescription)}
 - Amount: ₹${recoveryCase.amount}
 - Bank: ${bankCode} (Switch Health Index: ${healthIndex}%)
 
@@ -942,7 +1009,7 @@ Return ONLY JSON:
             contents: `You are the Autonomous Customer Recovery Communications Agent for RecoverFlow AI.
 Generate a high-converting, courteous, personalized notification for the customer.
 Context:
-- Customer Name: ${recoveryCase.customer.name}
+- Customer Name: ${sanitizeForPrompt(recoveryCase.customer.name)}
 - Channel: ${strategy.targetChannel}
 - Payment Amount: ₹${netAmount.toLocaleString('en-IN')} (Original: ₹${recoveryCase.amount.toLocaleString('en-IN')})
 - Discount Applied: ${strategy.offeredDiscountPct}%
@@ -1099,7 +1166,7 @@ Return ONLY JSON:
     const detectionResult = this.runCheckoutDetectionAgent(recoveryCase);
     recoveryCase.riskTier = detectionResult.riskTier;
     recoveryCase.status = 'DIAGNOSING';
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'checkout_detection_agent',
@@ -1117,7 +1184,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Checkout Detection Agent',
       action: 'CHECKOUT_ABANDONMENT_SCORED',
@@ -1134,7 +1201,7 @@ Return ONLY JSON:
     const diagnosis = this.runCheckoutDiagnosisAgent(recoveryCase);
     recoveryCase.diagnosis = diagnosis;
     recoveryCase.status = 'NEGOTIATING';
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'checkout_diagnosis_agent',
@@ -1147,7 +1214,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Checkout Diagnosis Agent',
       action: 'CHECKOUT_STAGE_FORENSICS',
@@ -1163,7 +1230,7 @@ Return ONLY JSON:
     const t2 = Date.now();
     const strategy = this.runCheckoutStrategyAgent(recoveryCase, diagnosis);
     recoveryCase.strategy = strategy;
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'checkout_strategy_agent',
@@ -1176,7 +1243,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Checkout Strategy Agent',
       action: 'CHECKOUT_RECOVERY_PLAN',
@@ -1195,7 +1262,7 @@ Return ONLY JSON:
 
     if (compliance.requiresHumanApproval || !compliance.approved) {
       recoveryCase.status = 'PENDING_APPROVAL';
-      db.upsertCase(recoveryCase);
+      await safePersistCase(recoveryCase);
 
       traces.push({
         nodeName: 'compliance_agent',
@@ -1208,7 +1275,7 @@ Return ONLY JSON:
         timestamp: new Date().toISOString()
       });
 
-      db.addAuditLog({
+      await safeAuditLog({
         caseId: recoveryCase.caseId,
         agentName: 'Compliance Agent',
         action: 'CHECKOUT_HALT_FOR_HUMAN_APPROVAL',
@@ -1237,7 +1304,7 @@ Return ONLY JSON:
     // =============================================================
     const t4 = Date.now();
     recoveryCase.status = 'EXECUTING';
-    await db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     const netAmount = Math.round(recoveryCase.amount - strategy.calculatedIncentiveINR);
 
@@ -1279,7 +1346,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Checkout Recovery Agent',
       action: 'CHECKOUT_PAYMENT_LINK_DISPATCHED',
@@ -1313,7 +1380,7 @@ Return ONLY JSON:
       businessInsights: `Checkout recovery: ₹${netAmount.toLocaleString('en-IN')} captured in ${elapsedSeconds}s from abandoned cart (₹${recoveryCase.amount}) via ${strategy.targetChannel}. ${recoveryCase.checkoutProfile?.cartItems?.length || 0}-item cart recovered.`
     };
     recoveryCase.status = 'RECOVERED';
-    await db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'checkout_outcome_agent',
@@ -1326,7 +1393,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Checkout Outcome Agent',
       action: 'CHECKOUT_RECOVERY_SETTLED',
@@ -1616,7 +1683,7 @@ Return ONLY JSON:
             contents: `You are the Checkout Recovery Communications Agent for RecoverFlow AI.
 Generate a personalized, cart-specific recovery message for an abandoned checkout.
 Context:
-- Customer Name: ${recoveryCase.customer.name}
+- Customer Name: ${sanitizeForPrompt(recoveryCase.customer.name)}
 - Channel: ${strategy.targetChannel}
 - Cart Total: ₹${checkout?.cartValueINR || recoveryCase.amount}
 - Net Amount: ₹${netAmount}
@@ -1682,7 +1749,7 @@ Return ONLY JSON:
     const detectionResult = this.runReceivablesDetectionAgent(recoveryCase);
     recoveryCase.riskTier = detectionResult.riskTier;
     recoveryCase.status = 'DIAGNOSING';
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'receivables_detection_agent',
@@ -1701,7 +1768,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Receivables Detection Agent',
       action: 'INVOICE_OVERDUE_SCORED',
@@ -1718,7 +1785,7 @@ Return ONLY JSON:
     const diagnosis = this.runReceivablesDiagnosisAgent(recoveryCase);
     recoveryCase.diagnosis = diagnosis;
     recoveryCase.status = 'NEGOTIATING';
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'receivables_diagnosis_agent',
@@ -1731,7 +1798,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Receivables Diagnosis Agent',
       action: 'INVOICE_ROOT_CAUSE_FORENSICS',
@@ -1747,7 +1814,7 @@ Return ONLY JSON:
     const t2 = Date.now();
     const strategy = this.runReceivablesStrategyAgent(recoveryCase, diagnosis);
     recoveryCase.strategy = strategy;
-    db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'receivables_strategy_agent',
@@ -1760,7 +1827,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Receivables Strategy Agent',
       action: 'INVOICE_RECOVERY_PLAN',
@@ -1779,7 +1846,7 @@ Return ONLY JSON:
 
     if (compliance.requiresHumanApproval || !compliance.approved) {
       recoveryCase.status = 'PENDING_APPROVAL';
-      db.upsertCase(recoveryCase);
+      await safePersistCase(recoveryCase);
 
       traces.push({
         nodeName: 'compliance_agent',
@@ -1792,7 +1859,7 @@ Return ONLY JSON:
         timestamp: new Date().toISOString()
       });
 
-      db.addAuditLog({
+      await safeAuditLog({
         caseId: recoveryCase.caseId,
         agentName: 'Compliance Agent',
         action: 'INVOICE_HALT_FOR_HUMAN_APPROVAL',
@@ -1821,7 +1888,7 @@ Return ONLY JSON:
     // =============================================================
     const t4 = Date.now();
     recoveryCase.status = 'EXECUTING';
-    await db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     const netAmount = Math.round(recoveryCase.amount - strategy.calculatedIncentiveINR);
 
@@ -1863,7 +1930,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Receivables Recovery Agent',
       action: 'B2B_PAYMENT_LINK_DISPATCHED',
@@ -1897,7 +1964,7 @@ Return ONLY JSON:
       businessInsights: `B2B receivables recovery: ₹${netAmount.toLocaleString('en-IN')} captured in ${elapsedSeconds}s from overdue invoice ${invoice?.invoiceNumber || ''} (${invoice?.dpdBucket || 'OVERDUE_30'} DPD). ${strategy.targetChannel} outreach.`
     };
     recoveryCase.status = 'RECOVERED';
-    await db.upsertCase(recoveryCase);
+    await safePersistCase(recoveryCase);
 
     traces.push({
       nodeName: 'receivables_outcome_agent',
@@ -1910,7 +1977,7 @@ Return ONLY JSON:
       timestamp: new Date().toISOString()
     });
 
-    db.addAuditLog({
+    await safeAuditLog({
       caseId: recoveryCase.caseId,
       agentName: 'Receivables Outcome Agent',
       action: 'INVOICE_RECOVERY_SETTLED',
@@ -2506,10 +2573,10 @@ Return ONLY JSON:
     };
 
     // Persist
-    await db.upsertCase(baseCase);
+    await safePersistCase(baseCase);
 
     // Audit log
-    db.addAuditLog({
+    await safeAuditLog({
       caseId,
       agentName: 'Voice Recovery Agent',
       action: outcome === 'PROMISE_TO_PAY' ? 'PROMISE_TO_PAY_CAPTURED' : 'VOICE_CALL_COMPLETED',

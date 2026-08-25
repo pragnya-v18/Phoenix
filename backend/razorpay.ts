@@ -35,8 +35,20 @@ export interface RazorpayPaymentLinkResponse {
 }
 
 export class RazorpayService {
-  // Processed event IDs cache for webhook idempotency & deduplication
-  private static processedEventIds = new Set<string>();
+  // Processed event IDs cache for webhook idempotency & deduplication (with TTL)
+  private static processedEventIds = new Map<string, number>();
+  private static readonly EVENT_ID_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  private static evictProcessedEvents() {
+    const now = Date.now();
+    if (this.processedEventIds.size > 5000) {
+      for (const [id, ts] of this.processedEventIds) {
+        if (now - ts > this.EVENT_ID_TTL_MS) {
+          this.processedEventIds.delete(id);
+        }
+      }
+    }
+  }
 
   private static getKeyId(): string | undefined {
     return process.env.RAZORPAY_KEY_ID;
@@ -221,6 +233,10 @@ export class RazorpayService {
       };
     }
 
+    // Track processed event for local dedup + periodic eviction
+    this.processedEventIds.set(eventId, Date.now());
+    this.evictProcessedEvents();
+
     const payment = eventPayload.payload?.payment?.entity;
     const paymentLink = eventPayload.payload?.payment_link?.entity;
     const subscription = eventPayload.payload?.subscription?.entity;
@@ -268,7 +284,7 @@ export class RazorpayService {
 
       await db.upsertCase(newCase);
 
-      db.addAuditLog({
+      await db.addAuditLog({
         caseId: newCase.caseId,
         agentName: 'Razorpay Ingress Sentinel',
         action: 'WEBHOOK_PAYMENT_FAILED_INGESTED',
@@ -334,7 +350,7 @@ export class RazorpayService {
 
         await db.upsertCase(matchedCase);
 
-        db.addAuditLog({
+        await db.addAuditLog({
           caseId: matchedCase.caseId,
           agentName: 'Razorpay Reconciliation Engine',
           action: 'PAYMENT_LINK_SETTLED_WEBHOOK',
@@ -387,7 +403,7 @@ export class RazorpayService {
 
         await db.upsertCase(matchedCase);
 
-        db.addAuditLog({
+        await db.addAuditLog({
           caseId: matchedCase.caseId,
           agentName: 'Razorpay Reconciliation Engine',
           action: 'PAYMENT_CAPTURED_WEBHOOK',
@@ -447,7 +463,13 @@ export class RazorpayService {
       };
 
       await db.upsertCase(subCase);
-      setTimeout(() => AgentSupervisor.executeRecoveryPipeline(subCase), 400);
+      setTimeout(async () => {
+        try {
+          await AgentSupervisor.executeRecoveryPipeline(subCase);
+        } catch (err) {
+          console.error('[RazorpayService] Subscription pipeline error:', subCase.caseId, err);
+        }
+      }, 400);
 
       return {
         status: 'INGESTED',
@@ -464,7 +486,7 @@ export class RazorpayService {
       if (refCaseId) {
         const c = db.getCase(refCaseId);
         if (c && c.status !== 'RECOVERED') {
-          db.addAuditLog({
+          await db.addAuditLog({
             caseId: c.caseId,
             agentName: 'Razorpay Ingress Sentinel',
             action: 'PAYMENT_LINK_EXPIRED_NOTIFICATION',
@@ -890,7 +912,11 @@ export class RazorpayService {
     
     // Asynchronously run agents
     setTimeout(async () => {
-      await AgentSupervisor.executeRecoveryPipeline(newCase);
+      try {
+        await AgentSupervisor.executeRecoveryPipeline(newCase);
+      } catch (err) {
+        console.error('[RazorpayService] Pipeline error on case:', newCase.caseId, err);
+      }
     }, 400);
 
     return newCase;
@@ -1040,7 +1066,7 @@ export class RazorpayService {
 
     await db.upsertCase(newCase);
 
-    db.addAuditLog({
+    await db.addAuditLog({
       caseId: newCase.caseId,
       agentName: 'Checkout Abandonment Sentinel',
       action: 'CHECKOUT_ABANDONMENT_INGESTED',
@@ -1275,7 +1301,7 @@ export class RazorpayService {
 
     await db.upsertCase(newCase);
 
-    db.addAuditLog({
+    await db.addAuditLog({
       caseId: newCase.caseId,
       agentName: 'Receivables Sentinel',
       action: 'INVOICE_OVERDUE_INGESTED',

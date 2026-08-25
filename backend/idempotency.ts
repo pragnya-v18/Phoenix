@@ -30,6 +30,13 @@ export class IdempotencyService {
           this.localLockMap.delete(key);
         }
       }
+      // Evict expired customer cooldown entries
+      for (const [key, entry] of this.customerCooldownMap.entries()) {
+        const elapsedMs = now - entry.lastCampaignAt;
+        if (elapsedMs > entry.windowMinutes * 60 * 1000) {
+          this.customerCooldownMap.delete(key);
+        }
+      }
     }, 60000);
     // Unref interval to not block process teardown
     if (this.cleanupInterval.unref) {

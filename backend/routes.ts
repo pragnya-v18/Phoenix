@@ -400,182 +400,196 @@ apiRouter.get('/cases/:caseId', (req: Request, res: Response) => {
 });
 
 // 6. Human-in-the-Loop (HITL) Manual Actions
-apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'], (req: Request, res: Response) => {
-  const { caseId } = req.params;
-  const { action, overrideDiscountPct, overrideChannel, operatorNotes, notes } = req.body;
+apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'], async (req: Request, res: Response) => {
+  try {
+    const { caseId } = req.params;
+    const { action, overrideDiscountPct, overrideChannel, operatorNotes, notes } = req.body;
 
-  const targetCase = db.getCase(caseId);
-  if (!targetCase) {
-    return res.status(404).json({ error: `Case ${caseId} not found` });
+    const targetCase = db.getCase(caseId);
+    if (!targetCase) {
+      return res.status(404).json({ error: `Case ${caseId} not found` });
+    }
+
+    if (action === 'APPROVE') {
+      const finalDiscount = typeof overrideDiscountPct === 'number' ? overrideDiscountPct : (targetCase.strategy?.offeredDiscountPct || 0);
+      const finalChannel = overrideChannel || targetCase.strategy?.targetChannel || 'WHATSAPP';
+      const netAmount = Math.round(targetCase.amount * (1 - finalDiscount / 100));
+
+      targetCase.status = 'EXECUTING';
+      targetCase.humanActionNotes = operatorNotes || notes || 'Approved by human operator';
+      targetCase.updatedAt = new Date().toISOString();
+
+      await db.upsertCase(targetCase);
+
+      await db.addAuditLog({
+        caseId,
+        agentName: 'Human Operator Override',
+        action: 'APPROVE_RECOVERY_EXECUTION',
+        rationale: `Manual approval granted. Discount: ${finalDiscount}%, Channel: ${finalChannel}. Notes: ${targetCase.humanActionNotes}`,
+        model: 'human-in-the-loop',
+        latencyMs: 0,
+        tokensUsed: 0
+      });
+
+      // Simulate instant recovery success after dispatch
+      setTimeout(async () => {
+        try {
+          const updated = db.getCase(caseId);
+          if (updated && updated.status === 'EXECUTING') {
+            updated.status = 'RECOVERED';
+            updated.outcome = {
+              isRecovered: true,
+              recoveredAmount: netAmount,
+              settledPaymentId: `pay_settled_${Date.now()}`,
+              recoveredAt: new Date().toISOString(),
+              timeToRecoverSeconds: 45,
+              attributedChannel: `${finalChannel}_HUMAN_APPROVED`,
+              costOfIncentiveINR: targetCase.amount - netAmount
+            };
+            await db.upsertCase(updated);
+
+            await db.addAuditLog({
+              caseId,
+              agentName: 'Outcome Agent',
+              action: 'PAYMENT_SETTLED',
+              rationale: `Customer completed checkout for ₹${netAmount} following human-approved intervention.`,
+              model: 'deterministic-rules',
+              latencyMs: 15,
+              tokensUsed: 0
+            });
+          }
+        } catch (err) {
+          console.error('[Route] human-action settle error:', caseId, err);
+        }
+      }, 3000);
+
+      return res.json({ success: true, status: 'EXECUTING', case: targetCase });
+    } else if (action === 'DISMISS') {
+      targetCase.status = 'DISMISSED';
+      targetCase.humanActionNotes = operatorNotes || notes || 'Dismissed by operator';
+      await db.upsertCase(targetCase);
+
+      await db.addAuditLog({
+        caseId,
+        agentName: 'Human Operator Override',
+        action: 'DISMISS_CASE',
+        rationale: `Case dismissed: ${targetCase.humanActionNotes}`,
+        model: 'human-in-the-loop',
+        latencyMs: 0,
+        tokensUsed: 0
+      });
+
+      return res.json({ success: true, status: 'DISMISSED', case: targetCase });
+    }
+
+    res.status(400).json({ error: 'Invalid action. Must be APPROVE or DISMISS.' });
+  } catch (err: any) {
+    console.error('[Route] human-action error:', err);
+    res.status(500).json({ error: 'Internal server error', details: err?.message || String(err) });
   }
-
-  if (action === 'APPROVE') {
-    const finalDiscount = typeof overrideDiscountPct === 'number' ? overrideDiscountPct : (targetCase.strategy?.offeredDiscountPct || 0);
-    const finalChannel = overrideChannel || targetCase.strategy?.targetChannel || 'WHATSAPP';
-    const netAmount = Math.round(targetCase.amount * (1 - finalDiscount / 100));
-
-    targetCase.status = 'EXECUTING';
-    targetCase.humanActionNotes = operatorNotes || notes || 'Approved by human operator';
-    targetCase.updatedAt = new Date().toISOString();
-
-    db.upsertCase(targetCase);
-
-    db.addAuditLog({
-      caseId,
-      agentName: 'Human Operator Override',
-      action: 'APPROVE_RECOVERY_EXECUTION',
-      rationale: `Manual approval granted. Discount: ${finalDiscount}%, Channel: ${finalChannel}. Notes: ${targetCase.humanActionNotes}`,
-      model: 'human-in-the-loop',
-      latencyMs: 0,
-      tokensUsed: 0
-    });
-
-    // Simulate instant recovery success after dispatch
-    setTimeout(() => {
-      const updated = db.getCase(caseId);
-      if (updated && updated.status === 'EXECUTING') {
-        updated.status = 'RECOVERED';
-        updated.outcome = {
-          isRecovered: true,
-          recoveredAmount: netAmount,
-          settledPaymentId: `pay_settled_${Date.now()}`,
-          recoveredAt: new Date().toISOString(),
-          timeToRecoverSeconds: 45,
-          attributedChannel: `${finalChannel}_HUMAN_APPROVED`,
-          costOfIncentiveINR: targetCase.amount - netAmount
-        };
-        db.upsertCase(updated);
-
-        db.addAuditLog({
-          caseId,
-          agentName: 'Outcome Agent',
-          action: 'PAYMENT_SETTLED',
-          rationale: `Customer completed checkout for ₹${netAmount} following human-approved intervention.`,
-          model: 'deterministic-rules',
-          latencyMs: 15,
-          tokensUsed: 0
-        });
-      }
-    }, 3000);
-
-    return res.json({ success: true, status: 'EXECUTING', case: targetCase });
-  } else if (action === 'DISMISS') {
-    targetCase.status = 'DISMISSED';
-    targetCase.humanActionNotes = operatorNotes || notes || 'Dismissed by operator';
-    db.upsertCase(targetCase);
-
-    db.addAuditLog({
-      caseId,
-      agentName: 'Human Operator Override',
-      action: 'DISMISS_CASE',
-      rationale: `Case dismissed: ${targetCase.humanActionNotes}`,
-      model: 'human-in-the-loop',
-      latencyMs: 0,
-      tokensUsed: 0
-    });
-
-    return res.json({ success: true, status: 'DISMISSED', case: targetCase });
-  }
-
-  res.status(400).json({ error: 'Invalid action. Must be APPROVE or DISMISS.' });
 });
 
 // 7. ACP 2.0 Negotiation Endpoints
-apiRouter.post(['/acp/negotiate', '/acp/negotiate/:caseId'], (req: Request, res: Response) => {
-  const caseId = req.params.caseId || req.body.caseId;
-  const customerAgentIntent = req.body.customerAgentIntent || req.body.intent;
-  const payload = req.body.payload;
+apiRouter.post(['/acp/negotiate', '/acp/negotiate/:caseId'], async (req: Request, res: Response) => {
+  try {
+    const caseId = req.params.caseId || req.body.caseId;
+    const customerAgentIntent = req.body.customerAgentIntent || req.body.intent;
+    const payload = req.body.payload;
 
-  const targetCase = db.getCase(caseId);
-  if (!targetCase) {
-    return res.status(404).json({ error: `Case ${caseId} not found` });
+    const targetCase = db.getCase(caseId);
+    if (!targetCase) {
+      return res.status(404).json({ error: `Case ${caseId} not found` });
+    }
+
+    // 1. Log incoming Customer Agent Message
+    await db.appendACPMessage(caseId, {
+      sender: 'CustomerWalletAgent',
+      receiver: 'MerchantRecoveryAgent',
+      intent: customerAgentIntent || 'COUNTER_OFFER',
+      payload: payload || {}
+    });
+
+    // 2. Autonomous Merchant Recovery Agent Evaluation
+    let replyIntent: 'PROPOSE_OFFER' | 'ACCEPT_AND_COMMIT' | 'REJECT' = 'PROPOSE_OFFER';
+    let replyPayload: any = {};
+
+    if (customerAgentIntent === 'ACCEPT_AND_COMMIT' || payload?.acceptProposedOffer) {
+      replyIntent = 'ACCEPT_AND_COMMIT';
+      const discount = targetCase.strategy?.offeredDiscountPct || 5;
+      const netAmount = Math.round(targetCase.amount * (1 - discount / 100));
+
+      replyPayload = {
+        message: 'Settlement authorized. 1-Click Razorpay Payment Link generated.',
+        selectedMethod: payload?.selectedMethod || 'CARD',
+        netAmount,
+        settlementLink: `https://rzp.io/l/rec_${targetCase.caseId.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+        expiresInMinutes: 30
+      };
+
+      const mdrCalc = FinancialAccountingEngine.calculateMDRFee(netAmount, 'CARD');
+      targetCase.status = 'RECOVERED';
+      targetCase.outcome = {
+        isRecovered: true,
+        recoveredAmount: netAmount,
+        settledPaymentId: `pay_acp_${Date.now()}`,
+        recoveredAt: new Date().toISOString(),
+        timeToRecoverSeconds: 65,
+        attributedChannel: 'ACP_A2A_DIRECT',
+        costOfIncentiveINR: targetCase.amount - netAmount,
+        estimatedMdrFeeINR: mdrCalc.totalMdrFeeINR,
+        mdrRatePct: mdrCalc.mdrRatePct
+      };
+      await db.upsertCase(targetCase);
+
+    } else if (payload?.requestDiscountIncrease) {
+      const requestedDiscount = Math.min(payload.requestedDiscountPct || 7, 10); // Cap at 10% policy
+      const netAmount = Math.round(targetCase.amount * (1 - requestedDiscount / 100));
+
+      replyIntent = 'PROPOSE_OFFER';
+      replyPayload = {
+        message: `Merchant Agent counter-proposal: Approved ${requestedDiscount}% discount for instant tokenized card checkout.`,
+        discountPct: requestedDiscount,
+        netAmount,
+        validForMinutes: 15
+      };
+    } else {
+      replyIntent = 'PROPOSE_OFFER';
+      replyPayload = {
+        message: 'Merchant Agent proposal: 5% instant cashback on card switch with no cart regeneration required.',
+        discountPct: 5,
+        netAmount: Math.round(targetCase.amount * 0.95),
+        validForMinutes: 20
+      };
+    }
+
+    // 3. Log outgoing Merchant Agent response
+    const agentMessage = await db.appendACPMessage(caseId, {
+      sender: 'MerchantRecoveryAgent',
+      receiver: 'CustomerWalletAgent',
+      intent: replyIntent,
+      payload: replyPayload
+    });
+
+    await db.addAuditLog({
+      caseId,
+      agentName: 'Negotiation Agent',
+      action: 'ACP_A2A_ROUND_TRIP',
+      rationale: `Received ${customerAgentIntent}. Responded with ${replyIntent}. Payload: ${JSON.stringify(replyPayload)}`,
+      model: 'gemini-3.7-flash',
+      latencyMs: 310,
+      tokensUsed: 420
+    });
+
+    res.json({
+      caseId,
+      status: targetCase.status,
+      agentResponse: agentMessage,
+      acpSession: targetCase.acpSession
+    });
+  } catch (err: any) {
+    console.error('[Route] acp/negotiate error:', err);
+    res.status(500).json({ error: 'Internal server error', details: err?.message || String(err) });
   }
-
-  // 1. Log incoming Customer Agent Message
-  db.appendACPMessage(caseId, {
-    sender: 'CustomerWalletAgent',
-    receiver: 'MerchantRecoveryAgent',
-    intent: customerAgentIntent || 'COUNTER_OFFER',
-    payload: payload || {}
-  });
-
-  // 2. Autonomous Merchant Recovery Agent Evaluation
-  let replyIntent: 'PROPOSE_OFFER' | 'ACCEPT_AND_COMMIT' | 'REJECT' = 'PROPOSE_OFFER';
-  let replyPayload: any = {};
-
-  if (customerAgentIntent === 'ACCEPT_AND_COMMIT' || payload?.acceptProposedOffer) {
-    replyIntent = 'ACCEPT_AND_COMMIT';
-    const discount = targetCase.strategy?.offeredDiscountPct || 5;
-    const netAmount = Math.round(targetCase.amount * (1 - discount / 100));
-
-    replyPayload = {
-      message: 'Settlement authorized. 1-Click Razorpay Payment Link generated.',
-      selectedMethod: payload?.selectedMethod || 'CARD',
-      netAmount,
-      settlementLink: `https://rzp.io/l/rec_${targetCase.caseId.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-      expiresInMinutes: 30
-    };
-
-    const mdrCalc = FinancialAccountingEngine.calculateMDRFee(netAmount, 'CARD');
-    targetCase.status = 'RECOVERED';
-    targetCase.outcome = {
-      isRecovered: true,
-      recoveredAmount: netAmount,
-      settledPaymentId: `pay_acp_${Date.now()}`,
-      recoveredAt: new Date().toISOString(),
-      timeToRecoverSeconds: 65,
-      attributedChannel: 'ACP_A2A_DIRECT',
-      costOfIncentiveINR: targetCase.amount - netAmount,
-      estimatedMdrFeeINR: mdrCalc.totalMdrFeeINR,
-      mdrRatePct: mdrCalc.mdrRatePct
-    };
-    db.upsertCase(targetCase);
-
-  } else if (payload?.requestDiscountIncrease) {
-    const requestedDiscount = Math.min(payload.requestedDiscountPct || 7, 10); // Cap at 10% policy
-    const netAmount = Math.round(targetCase.amount * (1 - requestedDiscount / 100));
-
-    replyIntent = 'PROPOSE_OFFER';
-    replyPayload = {
-      message: `Merchant Agent counter-proposal: Approved ${requestedDiscount}% discount for instant tokenized card checkout.`,
-      discountPct: requestedDiscount,
-      netAmount,
-      validForMinutes: 15
-    };
-  } else {
-    replyIntent = 'PROPOSE_OFFER';
-    replyPayload = {
-      message: 'Merchant Agent proposal: 5% instant cashback on card switch with no cart regeneration required.',
-      discountPct: 5,
-      netAmount: Math.round(targetCase.amount * 0.95),
-      validForMinutes: 20
-    };
-  }
-
-  // 3. Log outgoing Merchant Agent response
-  const agentMessage = db.appendACPMessage(caseId, {
-    sender: 'MerchantRecoveryAgent',
-    receiver: 'CustomerWalletAgent',
-    intent: replyIntent,
-    payload: replyPayload
-  });
-
-  db.addAuditLog({
-    caseId,
-    agentName: 'Negotiation Agent',
-    action: 'ACP_A2A_ROUND_TRIP',
-    rationale: `Received ${customerAgentIntent}. Responded with ${replyIntent}. Payload: ${JSON.stringify(replyPayload)}`,
-    model: 'gemini-3.7-flash',
-    latencyMs: 310,
-    tokensUsed: 420
-  });
-
-  res.json({
-    caseId,
-    status: targetCase.status,
-    agentResponse: agentMessage,
-    acpSession: targetCase.acpSession
-  });
 });
 
 // 8. Deterministic Anti-Abuse & Customer Cooldown Telemetry

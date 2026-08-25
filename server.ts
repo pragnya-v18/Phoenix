@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { apiRouter } from './backend/routes.js';
 
@@ -32,9 +32,33 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  // Global error-handling middleware — catches unhandled route/async errors
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    console.error('[Server] Unhandled error:', err);
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Internal server error', details: err?.message || String(err) });
+  });
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[RecoverFlow AI] Server running on http://0.0.0.0:${PORT}`);
   });
+
+  // Graceful shutdown
+  const shutdown = (signal: string) => {
+    console.log(`[Server] ${signal} received — shutting down gracefully...`);
+    server.close(() => {
+      console.log('[Server] HTTP server closed. Exiting.');
+      process.exit(0);
+    });
+    // Force exit after 10s if connections hang
+    setTimeout(() => {
+      console.error('[Server] Forced exit after timeout.');
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer().catch((err) => {

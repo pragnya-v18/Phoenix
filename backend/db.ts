@@ -79,6 +79,20 @@ export class FirestoreDatabase {
   private auditLogsCache: Map<string, AuditLogEntry[]> = new Map();
   private bankHealthCache: Map<string, BankHealthMetric> = new Map();
   
+  private readonly MAX_CASES_CACHE = 2000;
+  private readonly MAX_AUDIT_CACHE = 2000;
+
+  private evictCache<K, V>(map: Map<K, V>, maxSize: number) {
+    if (map.size > maxSize) {
+      const iter = map.keys();
+      const toDelete = map.size - maxSize;
+      for (let i = 0; i < toDelete; i++) {
+        const key = iter.next().value;
+        if (key !== undefined) map.delete(key);
+      }
+    }
+  }
+  
   private firestoreOnline: boolean = false;
   private isInitialized: boolean = false;
 
@@ -406,6 +420,7 @@ export class FirestoreDatabase {
   public async upsertCase(recoveryCase: RecoveryCase): Promise<RecoveryCase> {
     recoveryCase.updatedAt = new Date().toISOString();
     this.casesCache.set(recoveryCase.caseId, recoveryCase);
+    this.evictCache(this.casesCache, this.MAX_CASES_CACHE);
     this.saveToDisk();
 
     // Persist to Firestore if online
@@ -473,6 +488,7 @@ export class FirestoreDatabase {
     const caseLogs = this.auditLogsCache.get(entry.caseId) || [];
     caseLogs.push(fullLog);
     this.auditLogsCache.set(entry.caseId, caseLogs);
+    this.evictCache(this.auditLogsCache, this.MAX_AUDIT_CACHE);
     this.saveToDisk();
 
     // Persist to Firestore if online
@@ -586,6 +602,7 @@ export class FirestoreDatabase {
       'SMS': { name: 'SMS Smart Link Routing', costPerAttempt: 0.45 },
       'EMAIL': { name: 'Email Concierge / Invoice', costPerAttempt: 0.15 },
       'DIRECT_RETRY': { name: 'Zero-Touch Switch Retry', costPerAttempt: 0.25 },
+      'VOICE': { name: 'AI Voice Concierge', costPerAttempt: 4.50 },
       'VOICE_CALL': { name: 'AI Voice Concierge', costPerAttempt: 4.50 }
     };
 
