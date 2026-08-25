@@ -30,7 +30,19 @@ export type RootCauseCategory =
   | 'AUTH_TIMEOUT'
   | 'MANDATE_EXPIRED'
   | 'CUSTOMER_FRICTION'
-  | 'GATEWAY_ERROR';
+  | 'GATEWAY_ERROR'
+  | 'CHECKOUT_STALL'
+  | 'CHECKOUT_PAYMENT_DECLINE'
+  | 'CHECKOUT_SESSION_EXPIRED'
+  | 'CHECKOUT_PRICE_SENSITIVITY';
+
+export type CheckoutStage =
+  | 'CART_VIEW'
+  | 'ADDRESS_ENTRY'
+  | 'PAYMENT_SELECTION'
+  | 'PAYMENT_AUTHORIZATION'
+  | 'OTP_ENTRY'
+  | 'FAILED';
 
 export type BankSwitchStatus = 'HEALTHY' | 'DEGRADED' | 'OUTAGE';
 
@@ -108,6 +120,56 @@ export interface CustomerProfile {
   lastRecoveryCampaignAt?: string;
   isCoolingDown?: boolean;
   cooldownRemainingMinutes?: number;
+}
+
+export interface CheckoutProfile {
+  checkoutId: string;
+  sessionId: string;
+  abandonedAt: string;
+  lastActivityAt: string;
+  stageReached: CheckoutStage;
+  cartValueINR: number;
+  cartItems: Array<{
+    name: string;
+    quantity: number;
+    priceINR: number;
+  }>;
+  totalCartItems: number;
+  deviceType: 'mobile' | 'desktop' | 'tablet';
+  browserSessionDurationSec: number;
+  previousVisitCount: number;
+  recoveryProbability: number;
+}
+
+export interface CheckoutAbandonmentMetrics {
+  totalAbandonedCheckouts: number;
+  totalRecoveredCheckouts: number;
+  checkoutRecoveryRatePct: number;
+  recoveredGMV_INR: number;
+  totalAtRiskGMV_INR: number;
+  avgRecoveryTimeMinutes: number;
+  stageBreakdown: Array<{
+    stage: CheckoutStage;
+    stageLabel: string;
+    abandonedCount: number;
+    recoveredCount: number;
+    recoveryRatePct: number;
+    gmvAtRiskINR: number;
+    gmvRecoveredINR: number;
+  }>;
+  channelBreakdown: Array<{
+    channel: string;
+    attempted: number;
+    recovered: number;
+    recoveryRatePct: number;
+    gmvRecoveredINR: number;
+  }>;
+  deviceBreakdown: Array<{
+    device: string;
+    abandonedCount: number;
+    recoveredCount: number;
+    recoveryRatePct: number;
+  }>;
 }
 
 export interface SourceEventPayload {
@@ -231,6 +293,7 @@ export interface RecoveryCase {
   acpSession?: ACPSession;
   compliance?: ComplianceEvaluation;
   outcome?: OutcomeRecord;
+  checkoutProfile?: CheckoutProfile;
   humanActionNotes?: string;
   operatorId?: string;
   cooldownStatus?: {
@@ -315,8 +378,11 @@ export interface ExecutiveKPIs {
   // 4. Breakdown Dimensions calculated from case records
   channelMetrics: ChannelRecoveryMetric[];
   rootCauseMetrics: RootCauseRecoveryMetric[];
+
+  // 5. Checkout Abandonment Recovery Metrics
+  checkoutMetrics: CheckoutAbandonmentMetrics;
   
-  // 5. Batch Verification Metadata
+  // 6. Batch Verification Metadata
   batchTimestamp: string;
   settledCasesCount: number;
 }

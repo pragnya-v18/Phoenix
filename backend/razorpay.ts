@@ -16,7 +16,7 @@ import { db } from './db.js';
 import { AgentSupervisor } from './agents.js';
 import { IdempotencyService } from './idempotency.js';
 import { FinancialAccountingEngine } from './financials.js';
-import { RecoveryCase, PaymentMethod, ChannelType } from '../src/types.js';
+import { RecoveryCase, PaymentMethod, ChannelType, CheckoutStage, CheckoutProfile } from '../src/types.js';
 
 export interface RazorpayPaymentLinkResponse {
   id: string;
@@ -894,5 +894,199 @@ export class RazorpayService {
     }, 400);
 
     return newCase;
+  }
+
+  /**
+   * Simulate a checkout abandonment scenario for live judge demonstrations.
+   */
+  public static async simulateCheckoutAbandonment(
+    scenario: 'HIGH_VALUE_CART' | 'MOBILE_FRICTION' | 'OTP_TIMEOUT' | 'PRICE_SENSITIVITY' = 'HIGH_VALUE_CART'
+  ): Promise<RecoveryCase> {
+    const caseId = `REC-CO-${Date.now().toString().slice(-4)}`;
+    let newCase: RecoveryCase;
+
+    const scenarios: Record<string, {
+      name: string;
+      email: string;
+      phone: string;
+      tier: 'PLATINUM' | 'GOLD' | 'SILVER' | 'BRONZE';
+      cartValue: number;
+      method: PaymentMethod;
+      bankCode: string;
+      stage: CheckoutStage;
+      device: 'mobile' | 'desktop' | 'tablet';
+      sessionDuration: number;
+      priorVisits: number;
+      items: Array<{ name: string; quantity: number; priceINR: number }>;
+    }> = {
+      HIGH_VALUE_CART: {
+        name: 'Shreya Iyer',
+        email: 'shreya.iyer@enterprise.in',
+        phone: '+91 98200 11223',
+        tier: 'PLATINUM',
+        cartValue: 34999.00,
+        method: 'CARD',
+        bankCode: 'ICICI',
+        stage: 'PAYMENT_AUTHORIZATION',
+        device: 'desktop',
+        sessionDuration: 312,
+        priorVisits: 6,
+        items: [
+          { name: 'Enterprise Analytics Suite (Annual)', quantity: 1, priceINR: 24999 },
+          { name: 'Priority Support Add-on', quantity: 1, priceINR: 5000 },
+          { name: 'Custom Integration Module', quantity: 1, priceINR: 5000 }
+        ]
+      },
+      MOBILE_FRICTION: {
+        name: 'Arjun Reddy',
+        email: 'arjun.r@startup.co',
+        phone: '+91 97401 88221',
+        tier: 'GOLD',
+        cartValue: 8999.00,
+        method: 'UPI',
+        bankCode: 'HDFC',
+        stage: 'PAYMENT_SELECTION',
+        device: 'mobile',
+        sessionDuration: 480,
+        priorVisits: 2,
+        items: [
+          { name: 'Smart Fitness Band Pro', quantity: 1, priceINR: 5999 },
+          { name: 'Silicone Strap Pack', quantity: 1, priceINR: 999 },
+          { name: 'Screen Protector', quantity: 2, priceINR: 500 }
+        ]
+      },
+      OTP_TIMEOUT: {
+        name: 'Nandini Sharma',
+        email: 'nandini.s@corp.com',
+        phone: '+91 99302 44556',
+        tier: 'GOLD',
+        cartValue: 12499.00,
+        method: 'CARD',
+        bankCode: 'SBI',
+        stage: 'OTP_ENTRY',
+        device: 'desktop',
+        sessionDuration: 265,
+        priorVisits: 4,
+        items: [
+          { name: 'Wireless Noise-Cancelling Headphones', quantity: 1, priceINR: 9999 },
+          { name: 'Premium Carrying Case', quantity: 1, priceINR: 2500 }
+        ]
+      },
+      PRICE_SENSITIVITY: {
+        name: 'Karthik Menon',
+        email: 'karthik.m@email.com',
+        phone: '+91 98456 77889',
+        tier: 'SILVER',
+        cartValue: 3499.00,
+        method: 'UPI',
+        bankCode: 'AXIS',
+        stage: 'CART_VIEW',
+        device: 'mobile',
+        sessionDuration: 95,
+        priorVisits: 1,
+        items: [
+          { name: 'Organic Cotton T-Shirt', quantity: 2, priceINR: 999 },
+          { name: 'Canvas Tote Bag', quantity: 1, priceINR: 500 }
+        ]
+      }
+    };
+
+    const s = scenarios[scenario] || scenarios.HIGH_VALUE_CART;
+
+    newCase = {
+      caseId,
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'CHECKOUT_ABANDONED',
+      status: 'DETECTED',
+      amount: s.cartValue,
+      currency: 'INR',
+      riskTier: s.cartValue >= 25000 ? 'CRITICAL' : (s.cartValue >= 5000 ? 'HIGH' : 'MEDIUM'),
+      customer: {
+        id: `cust_co_${Date.now()}`,
+        name: s.name,
+        phone: s.phone,
+        email: s.email,
+        clvTier: s.tier,
+        historicalRecoveries: s.tier === 'PLATINUM' ? 2 : (s.tier === 'GOLD' ? 1 : 0),
+        totalLifetimeSpendINR: s.cartValue * (s.tier === 'PLATINUM' ? 8 : (s.tier === 'GOLD' ? 4 : 2))
+      },
+      sourceEvent: {
+        orderId: `order_co_${Date.now()}`,
+        amount: s.cartValue,
+        currency: 'INR',
+        method: s.method,
+        errorCode: 'CHECKOUT_ABANDONED',
+        errorDescription: `Customer abandoned checkout at ${s.stage.replace(/_/g, ' ')} stage after ${Math.round(s.sessionDuration / 60)} min ${s.sessionDuration % 60} sec session`,
+        occurredAt: new Date().toISOString(),
+        bankCode: s.bankCode
+      },
+      checkoutProfile: {
+        checkoutId: `chk_${Date.now()}`,
+        sessionId: `sess_${Date.now()}`,
+        abandonedAt: new Date().toISOString(),
+        lastActivityAt: new Date().toISOString(),
+        stageReached: s.stage,
+        cartValueINR: s.cartValue,
+        cartItems: s.items,
+        totalCartItems: s.items.reduce((sum, i) => sum + i.quantity, 0),
+        deviceType: s.device,
+        browserSessionDurationSec: s.sessionDuration,
+        previousVisitCount: s.priorVisits,
+        recoveryProbability: 0.75
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.upsertCase(newCase);
+
+    db.addAuditLog({
+      caseId: newCase.caseId,
+      agentName: 'Checkout Abandonment Sentinel',
+      action: 'CHECKOUT_ABANDONMENT_INGESTED',
+      rationale: `Checkout abandoned at ${s.stage.replace(/_/g, ' ')} stage. Cart: ₹${s.cartValue.toLocaleString('en-IN')} (${s.items.length} items). Customer: ${s.name} (${s.tier}). Device: ${s.device}. Dispatching to Checkout Recovery Agents.`,
+      model: 'checkout-sentinel',
+      latencyMs: 6,
+      tokensUsed: 0
+    });
+
+    setTimeout(async () => {
+      try {
+        await AgentSupervisor.executeRecoveryPipeline(newCase);
+      } catch (err) {
+        console.error('[RazorpayService] Checkout pipeline error:', newCase.caseId, err);
+      }
+    }, 400);
+
+    return newCase;
+  }
+
+  /**
+   * Simulate a batch of checkout abandonments across different stages and devices.
+   */
+  public static async simulateCheckoutBatchStream(batchSize: number = 4): Promise<{
+    batchId: string;
+    casesCreated: RecoveryCase[];
+    totalCartValueAtRiskINR: number;
+  }> {
+    const batchId = `CO-BATCH-${Date.now()}`;
+    const scenarios: Array<'HIGH_VALUE_CART' | 'MOBILE_FRICTION' | 'OTP_TIMEOUT' | 'PRICE_SENSITIVITY'> = [
+      'HIGH_VALUE_CART', 'MOBILE_FRICTION', 'OTP_TIMEOUT', 'PRICE_SENSITIVITY'
+    ];
+
+    const actualCount = Math.min(batchSize, scenarios.length);
+    const createdCases: RecoveryCase[] = [];
+    let totalCartValueAtRisk = 0;
+
+    for (let i = 0; i < actualCount; i++) {
+      const testCase = await this.simulateCheckoutAbandonment(scenarios[i]);
+      totalCartValueAtRisk += testCase.amount;
+      createdCases.push(testCase);
+
+      // Stagger pipeline triggers
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    return { batchId, casesCreated: createdCases, totalCartValueAtRiskINR: totalCartValueAtRisk };
   }
 }

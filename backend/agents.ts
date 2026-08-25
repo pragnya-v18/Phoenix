@@ -26,7 +26,8 @@ import {
   ChannelType,
   RiskTier,
   WhatsAppInteractivePayload,
-  AntiAbusePolicyConfig
+  AntiAbusePolicyConfig,
+  CheckoutStage
 } from '../src/types.js';
 
 // Lazy-initialize Gemini AI client server-side with telemetry headers
@@ -172,6 +173,13 @@ export class AgentSupervisor {
       });
 
       return { updatedCase: recoveryCase, traces };
+    }
+
+    // =============================================================
+    // CHECKOUT_ABANDONED: Branch to dedicated Checkout Recovery Pipeline
+    // =============================================================
+    if (recoveryCase.eventType === 'CHECKOUT_ABANDONED') {
+      return await this.executeCheckoutRecoveryPipeline(recoveryCase, traces, startTime);
     }
 
     // =============================================================
@@ -1058,6 +1066,589 @@ Return ONLY JSON:
       insights: fallbackInsight,
       modelUsed: 'deterministic-rules',
       tokensUsed: 0
+    };
+  }
+
+  // ===============================================================
+  // CHECKOUT ABANDONMENT RECOVERY PIPELINE
+  // ===============================================================
+  private static async executeCheckoutRecoveryPipeline(
+    recoveryCase: RecoveryCase,
+    traces: AgentExecutionTrace[],
+    startTime: number
+  ): Promise<{ updatedCase: RecoveryCase; traces: AgentExecutionTrace[] }> {
+    const checkout = recoveryCase.checkoutProfile;
+
+    // =============================================================
+    // CHECKOUT NODE 1: Checkout Detection & Recovery Probability
+    // =============================================================
+    const t0 = Date.now();
+    const detectionResult = this.runCheckoutDetectionAgent(recoveryCase);
+    recoveryCase.riskTier = detectionResult.riskTier;
+    recoveryCase.status = 'DIAGNOSING';
+    db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'checkout_detection_agent',
+      agentTitle: 'Checkout Abandonment Detection Agent',
+      status: 'COMPLETED',
+      reasoning: detectionResult.reasoning,
+      latencyMs: Date.now() - t0,
+      tokensUsed: 0,
+      outputSummary: {
+        riskTier: recoveryCase.riskTier,
+        recoveryProbability: detectionResult.recoveryProbability,
+        cartValueINR: checkout?.cartValueINR || recoveryCase.amount,
+        model: 'deterministic-checkout-detector'
+      },
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Checkout Detection Agent',
+      action: 'CHECKOUT_ABANDONMENT_SCORED',
+      rationale: detectionResult.reasoning,
+      model: 'deterministic-checkout-detector',
+      latencyMs: Date.now() - t0,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // CHECKOUT NODE 2: Checkout Diagnosis & Stage Analysis
+    // =============================================================
+    const t1 = Date.now();
+    const diagnosis = this.runCheckoutDiagnosisAgent(recoveryCase);
+    recoveryCase.diagnosis = diagnosis;
+    recoveryCase.status = 'NEGOTIATING';
+    db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'checkout_diagnosis_agent',
+      agentTitle: 'Checkout Stage Diagnosis Agent',
+      status: 'COMPLETED',
+      reasoning: diagnosis.rootCauseDetail,
+      latencyMs: Date.now() - t1,
+      tokensUsed: 0,
+      outputSummary: diagnosis,
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Checkout Diagnosis Agent',
+      action: 'CHECKOUT_STAGE_FORENSICS',
+      rationale: diagnosis.rootCauseDetail,
+      model: 'deterministic-checkout-diagnosis',
+      latencyMs: Date.now() - t1,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // CHECKOUT NODE 3: Checkout Recovery Strategy
+    // =============================================================
+    const t2 = Date.now();
+    const strategy = this.runCheckoutStrategyAgent(recoveryCase, diagnosis);
+    recoveryCase.strategy = strategy;
+    db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'checkout_strategy_agent',
+      agentTitle: 'Checkout Recovery Strategy Agent',
+      status: 'COMPLETED',
+      reasoning: strategy.reasoning,
+      latencyMs: Date.now() - t2,
+      tokensUsed: 0,
+      outputSummary: strategy,
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Checkout Strategy Agent',
+      action: 'CHECKOUT_RECOVERY_PLAN',
+      rationale: strategy.reasoning,
+      model: 'deterministic-checkout-strategy',
+      latencyMs: Date.now() - t2,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // CHECKOUT NODE 4: Compliance (reuses existing agent)
+    // =============================================================
+    const t3 = Date.now();
+    const compliance = await this.runComplianceAgent(recoveryCase, strategy);
+    recoveryCase.compliance = compliance;
+
+    if (compliance.requiresHumanApproval || !compliance.approved) {
+      recoveryCase.status = 'PENDING_APPROVAL';
+      db.upsertCase(recoveryCase);
+
+      traces.push({
+        nodeName: 'compliance_agent',
+        agentTitle: 'Compliance & Safety Agent',
+        status: 'HALTED',
+        reasoning: `Circuit breaker tripped: ${compliance.violations.join('; ')}. Routing to Human-In-The-Loop Clearance Queue.`,
+        latencyMs: Date.now() - t3,
+        tokensUsed: 220,
+        outputSummary: compliance,
+        timestamp: new Date().toISOString()
+      });
+
+      db.addAuditLog({
+        caseId: recoveryCase.caseId,
+        agentName: 'Compliance Agent',
+        action: 'CHECKOUT_HALT_FOR_HUMAN_APPROVAL',
+        rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
+        model: 'gemini-3.7-flash + deterministic-guardrails',
+        latencyMs: Date.now() - t3,
+        tokensUsed: 220
+      });
+
+      return { updatedCase: recoveryCase, traces };
+    }
+
+    traces.push({
+      nodeName: 'compliance_agent',
+      agentTitle: 'Compliance & Safety Agent',
+      status: 'COMPLETED',
+      reasoning: `All checkout recovery safety checks passed.`,
+      latencyMs: Date.now() - t3,
+      tokensUsed: 220,
+      outputSummary: compliance,
+      timestamp: new Date().toISOString()
+    });
+
+    // =============================================================
+    // CHECKOUT NODE 5: Checkout Recovery Agent (Payment Link + Messaging)
+    // =============================================================
+    const t4 = Date.now();
+    recoveryCase.status = 'EXECUTING';
+    await db.upsertCase(recoveryCase);
+
+    const netAmount = Math.round(recoveryCase.amount - strategy.calculatedIncentiveINR);
+
+    const paymentLinkRes = await RazorpayService.createPaymentLink(
+      recoveryCase,
+      netAmount,
+      strategy.offeredDiscountPct,
+      strategy.targetChannel
+    );
+    const paymentLink = paymentLinkRes.short_url;
+
+    const recoveryComms = await this.runCheckoutRecoveryAgent(recoveryCase, strategy, paymentLink, netAmount);
+    if (recoveryCase.strategy) {
+      recoveryCase.strategy.generatedMessageCopy = recoveryComms.messageBody;
+      if (recoveryComms.whatsAppInteractivePayload) {
+        recoveryCase.strategy.whatsAppInteractivePayload = recoveryComms.whatsAppInteractivePayload;
+      }
+    }
+
+    await IdempotencyService.recordCustomerCampaign(recoveryCase.customer.phone || recoveryCase.customer.id, 60);
+
+    traces.push({
+      nodeName: 'checkout_recovery_agent',
+      agentTitle: 'Checkout Recovery & Dispatch Agent',
+      status: 'COMPLETED',
+      reasoning: `Synthesized checkout recovery message [${recoveryComms.tone}]: "${recoveryComms.messageBody.slice(0, 100)}..." Dispatched via ${strategy.targetChannel}. Net payable: ₹${netAmount.toLocaleString('en-IN')}.`,
+      latencyMs: Date.now() - t4,
+      tokensUsed: 0,
+      outputSummary: {
+        paymentLink,
+        paymentLinkId: paymentLinkRes.id,
+        isLiveGenerated: paymentLinkRes.isLiveGenerated,
+        netAmount,
+        channel: strategy.targetChannel,
+        tone: recoveryComms.tone,
+        messageCopy: recoveryComms.messageBody,
+        whatsAppPayload: recoveryComms.whatsAppInteractivePayload
+      },
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Checkout Recovery Agent',
+      action: 'CHECKOUT_PAYMENT_LINK_DISPATCHED',
+      rationale: `Dispatched checkout recovery link ${paymentLink} via ${strategy.targetChannel}. Cart value: ₹${recoveryCase.amount}. Net: ₹${netAmount}.`,
+      model: 'deterministic-checkout-recovery',
+      latencyMs: Date.now() - t4,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // CHECKOUT NODE 6: Checkout Outcome Agent
+    // =============================================================
+    const t5 = Date.now();
+    const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+    const method = recoveryCase.sourceEvent.method || 'UPI';
+    const isCorporate = recoveryCase.customer.clvTier === 'PLATINUM' || netAmount >= 25000;
+    const mdrCalc = FinancialAccountingEngine.calculateMDRFee(netAmount, method, isCorporate);
+
+    recoveryCase.outcome = {
+      isRecovered: true,
+      recoveredAmount: netAmount,
+      settledPaymentId: `pay_checkout_${Date.now()}`,
+      paymentLinkId: paymentLinkRes.id,
+      reconciliationMethod: paymentLinkRes.isLiveGenerated ? 'PAYMENT_LINK_PAID_WEBHOOK' : 'SIMULATOR',
+      recoveredAt: new Date().toISOString(),
+      timeToRecoverSeconds: elapsedSeconds,
+      attributedChannel: `${strategy.targetChannel}_CHECKOUT_RECOVERY`,
+      costOfIncentiveINR: strategy.calculatedIncentiveINR,
+      estimatedMdrFeeINR: mdrCalc.totalMdrFeeINR,
+      mdrRatePct: mdrCalc.mdrRatePct,
+      businessInsights: `Checkout recovery: ₹${netAmount.toLocaleString('en-IN')} captured in ${elapsedSeconds}s from abandoned cart (₹${recoveryCase.amount}) via ${strategy.targetChannel}. ${recoveryCase.checkoutProfile?.cartItems?.length || 0}-item cart recovered.`
+    };
+    recoveryCase.status = 'RECOVERED';
+    await db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'checkout_outcome_agent',
+      agentTitle: 'Checkout Outcome Agent',
+      status: 'COMPLETED',
+      reasoning: recoveryCase.outcome.businessInsights,
+      latencyMs: Date.now() - t5,
+      tokensUsed: 0,
+      outputSummary: recoveryCase.outcome,
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Checkout Outcome Agent',
+      action: 'CHECKOUT_RECOVERY_SETTLED',
+      rationale: `Settled checkout recovery for ₹${netAmount.toLocaleString('en-IN')} from ₹${recoveryCase.amount} cart. MDR: ₹${mdrCalc.totalMdrFeeINR}. Channel: ${strategy.targetChannel}.`,
+      model: 'deterministic-checkout-outcome',
+      latencyMs: Date.now() - t5,
+      tokensUsed: 0
+    });
+
+    return { updatedCase: recoveryCase, traces };
+  }
+
+  // ===============================================================
+  // CHECKOUT DETECTION AGENT (Recovery Probability Calculator)
+  // ===============================================================
+  private static runCheckoutDetectionAgent(recoveryCase: RecoveryCase): {
+    riskTier: RiskTier;
+    recoveryProbability: number;
+    reasoning: string;
+  } {
+    const checkout = recoveryCase.checkoutProfile;
+    const cartValue = checkout?.cartValueINR || recoveryCase.amount;
+    const clvTier = recoveryCase.customer.clvTier;
+    const historicalRecoveries = recoveryCase.customer.historicalRecoveries || 0;
+    const stage = checkout?.stageReached || 'PAYMENT_SELECTION';
+    const priorVisits = checkout?.previousVisitCount || 0;
+    const sessionDuration = checkout?.browserSessionDurationSec || 0;
+    const totalItems = checkout?.totalCartItems || 1;
+
+    // Recovery probability calculation (0.0 to 1.0)
+    let prob = 0.40; // base
+
+    // Cart value signal: higher value = higher intent
+    if (cartValue >= 20000) prob += 0.18;
+    else if (cartValue >= 10000) prob += 0.14;
+    else if (cartValue >= 5000) prob += 0.10;
+    else if (cartValue >= 2000) prob += 0.06;
+
+    // CLV tier signal
+    if (clvTier === 'PLATINUM') prob += 0.15;
+    else if (clvTier === 'GOLD') prob += 0.10;
+    else if (clvTier === 'SILVER') prob += 0.05;
+
+    // Checkout stage signal: deeper = higher intent
+    const stageSignals: Record<string, number> = {
+      'CART_VIEW': 0.0,
+      'ADDRESS_ENTRY': 0.05,
+      'PAYMENT_SELECTION': 0.10,
+      'PAYMENT_AUTHORIZATION': 0.15,
+      'OTP_ENTRY': 0.18,
+      'FAILED': 0.03
+    };
+    prob += stageSignals[stage] || 0.05;
+
+    // Prior visit signal: repeat visitors more likely to convert
+    if (priorVisits >= 5) prob += 0.10;
+    else if (priorVisits >= 3) prob += 0.06;
+    else if (priorVisits >= 1) prob += 0.03;
+
+    // Session duration signal: longer session = more invested
+    if (sessionDuration >= 300) prob += 0.05;
+    else if (sessionDuration >= 120) prob += 0.03;
+
+    // Cart item count signal
+    if (totalItems >= 4) prob += 0.04;
+    else if (totalItems >= 2) prob += 0.02;
+
+    // Historical recovery penalty: too many recoveries = lower probability
+    if (historicalRecoveries >= 3) prob -= 0.10;
+    else if (historicalRecoveries >= 2) prob -= 0.05;
+
+    prob = Math.max(0.15, Math.min(0.98, prob));
+
+    // Risk tier from recovery probability
+    let riskTier: RiskTier = 'LOW';
+    if (prob >= 0.80) riskTier = 'CRITICAL';
+    else if (prob >= 0.65) riskTier = 'HIGH';
+    else if (prob >= 0.45) riskTier = 'MEDIUM';
+
+    // Override: high cart value or Platinum always HIGH+
+    if (cartValue >= 25000 || clvTier === 'PLATINUM') {
+      if (riskTier === 'LOW') riskTier = 'HIGH';
+    }
+
+    const stageLabel = stage.replace(/_/g, ' ').toLowerCase();
+    const reasoning = `Checkout abandoned at ${stageLabel} stage with ₹${cartValue.toLocaleString('en-IN')} cart (${totalItems} items, ${clvTier} CLV, ${priorVisits} prior visits). Recovery probability: ${(prob * 100).toFixed(0)}%.`;
+
+    return { riskTier, recoveryProbability: Number(prob.toFixed(2)), reasoning };
+  }
+
+  // ===============================================================
+  // CHECKOUT DIAGNOSIS AGENT (Stage-Based Root Cause)
+  // ===============================================================
+  private static runCheckoutDiagnosisAgent(recoveryCase: RecoveryCase): DiagnosisRecord {
+    const checkout = recoveryCase.checkoutProfile;
+    const stage = checkout?.stageReached || 'PAYMENT_SELECTION';
+    const method = recoveryCase.sourceEvent.method || 'UPI';
+    const sessionDuration = checkout?.browserSessionDurationSec || 0;
+
+    let rootCauseCategory: any = 'CHECKOUT_STALL';
+    let rootCauseDetail = '';
+    let isTransient = false;
+    let recommendedRail: PaymentMethod = method === 'UPI' ? 'CARD' : 'UPI';
+
+    switch (stage) {
+      case 'CART_VIEW':
+        rootCauseCategory = 'CHECKOUT_PRICE_SENSITIVITY';
+        rootCauseDetail = `Customer reviewed cart (₹${recoveryCase.amount.toLocaleString('en-IN')}) and exited without proceeding. Likely price sensitivity or comparison shopping. Recovery window: 30 minutes.`;
+        recommendedRail = 'CARD';
+        break;
+      case 'ADDRESS_ENTRY':
+        rootCauseCategory = 'CHECKOUT_STALL';
+        rootCauseDetail = `Customer stalled during address entry for ${Math.round(sessionDuration)}s. Likely form friction or unclear shipping costs. Recovery via simplified 1-click checkout link.`;
+        recommendedRail = method === 'UPI' ? 'CARD' : 'UPI';
+        break;
+      case 'PAYMENT_SELECTION':
+        rootCauseCategory = 'CHECKOUT_STALL';
+        rootCauseDetail = `Customer abandoned at payment method selection. Preferred ${method} may not be available or visible. Recommend presenting multiple payment options via payment link.`;
+        recommendedRail = method === 'UPI' ? 'CARD' : 'UPI';
+        break;
+      case 'PAYMENT_AUTHORIZATION':
+        rootCauseCategory = 'CHECKOUT_PAYMENT_DECLINE';
+        rootCauseDetail = `Customer initiated ${method} payment but authorization stalled for ${Math.round(sessionDuration)}s. Possible UPI app switch friction, 3DS timeout, or insufficient balance. Transient — retry with payment link.`;
+        isTransient = true;
+        recommendedRail = 'CARD';
+        break;
+      case 'OTP_ENTRY':
+        rootCauseCategory = 'CHECKOUT_SESSION_EXPIRED';
+        rootCauseDetail = `Customer reached OTP/2FA stage but session expired. OTP delivery delay or customer lost trust mid-2FA. Recovery via direct payment link bypassing OTP re-entry.`;
+        isTransient = true;
+        recommendedRail = method;
+        break;
+      case 'FAILED':
+      default:
+        rootCauseCategory = 'CHECKOUT_STALL';
+        rootCauseDetail = `Customer checkout session failed after ${Math.round(sessionDuration)}s. Recovery recommended via WhatsApp payment link with cart contents preserved.`;
+        recommendedRail = 'CARD';
+        break;
+    }
+
+    return {
+      rootCauseCategory,
+      rootCauseDetail,
+      confidenceScore: 0.92,
+      isTransient,
+      bankCode: recoveryCase.sourceEvent.bankCode || 'HDFC',
+      bankSwitchHealthIndex: 94.0,
+      recommendedRailSwitch: recommendedRail,
+      diagnosedAt: new Date().toISOString()
+    };
+  }
+
+  // ===============================================================
+  // CHECKOUT STRATEGY AGENT (Checkout-Specific Recovery Planning)
+  // ===============================================================
+  private static runCheckoutStrategyAgent(
+    recoveryCase: RecoveryCase,
+    diagnosis: DiagnosisRecord
+  ): StrategyRecord {
+    const checkout = recoveryCase.checkoutProfile;
+    const clvTier = recoveryCase.customer.clvTier;
+    const cartValue = checkout?.cartValueINR || recoveryCase.amount;
+    const stage = checkout?.stageReached || 'PAYMENT_SELECTION';
+    const priorVisits = checkout?.previousVisitCount || 0;
+    const isHighValue = cartValue >= 10000;
+    const isPlatinum = clvTier === 'PLATINUM';
+
+    // Determine channel based on CLV and device
+    let channel: ChannelType = 'WHATSAPP';
+    if (checkout?.deviceType === 'desktop' && !isPlatinum) {
+      channel = 'EMAIL';
+    } else if (clvTier === 'SILVER' || clvTier === 'BRONZE') {
+      channel = 'SMS';
+    }
+
+    // Determine incentive: higher for deeper stages and higher cart values
+    let discountPct = 0;
+    if (diagnosis.rootCauseCategory === 'CHECKOUT_PRICE_SENSITIVITY') {
+      discountPct = isHighValue ? 5.0 : 3.0;
+    } else if (stage === 'PAYMENT_AUTHORIZATION' || stage === 'OTP_ENTRY') {
+      // Deep-funnel: small incentive to close
+      discountPct = isPlatinum ? 2.0 : 3.0;
+    } else if (isHighValue && priorVisits >= 3) {
+      discountPct = 4.0;
+    } else {
+      discountPct = isHighValue ? 3.0 : 0;
+    }
+
+    // Cap at 10%
+    discountPct = Math.min(10.0, Math.max(0, discountPct));
+
+    const calculatedIncentive = (cartValue * discountPct) / 100;
+    const netAmount = Math.round(cartValue - calculatedIncentive);
+
+    // Expected recovery probability from checkout profile
+    const baseProb = checkout?.recoveryProbability || 0.70;
+    const adjustedProb = Math.min(0.98, baseProb + (discountPct > 0 ? 0.05 : 0));
+
+    const action = discountPct > 0 ? 'PAYMENT_LINK_DISPATCH' : 'ACP_A2A_OFFER';
+
+    let reasoning = `Checkout recovery for ${checkout?.totalCartItems || 1}-item ₹${cartValue.toLocaleString('en-IN')} cart (${stage.replace(/_/g, ' ')} stage). `;
+    if (discountPct > 0) {
+      reasoning += `Offering ${discountPct}% incentive (₹${calculatedIncentive.toFixed(2)}) via ${channel} to offset abandonment. `;
+    } else {
+      reasoning += `No incentive needed — high intent signals (CLV: ${clvTier}, ${priorVisits} prior visits). `;
+    }
+    reasoning += `Expected recovery: ${(adjustedProb * 100).toFixed(0)}%.`;
+
+    return {
+      recommendedAction: action as any,
+      targetChannel: channel,
+      offeredDiscountPct: discountPct,
+      calculatedIncentiveINR: calculatedIncentive,
+      delayMinutes: 0,
+      reasoning,
+      expectedRecoveryProbability: adjustedProb,
+      confidenceScore: 0.91,
+      scheduledExecutionAt: new Date().toISOString()
+    };
+  }
+
+  // ===============================================================
+  // CHECKOUT RECOVERY AGENT (Cart-Aware Personalized Messaging)
+  // ===============================================================
+  private static async runCheckoutRecoveryAgent(
+    recoveryCase: RecoveryCase,
+    strategy: StrategyRecord,
+    paymentLink: string,
+    netAmount: number
+  ): Promise<{
+    messageBody: string;
+    tone: string;
+    modelUsed: string;
+    tokensUsed: number;
+    whatsAppInteractivePayload?: WhatsAppInteractivePayload;
+  }> {
+    const checkout = recoveryCase.checkoutProfile;
+    const sanitizedPhone = recoveryCase.customer.phone.replace(/[^0-9]/g, '');
+    const cartSummary = checkout?.cartItems?.map(i => `${i.quantity}x ${i.name}`).join(', ') || 'your items';
+    const discountNote = strategy.offeredDiscountPct > 0 ? ` with ${strategy.offeredDiscountPct}% instant discount` : '';
+    const recommendedRail = recoveryCase.diagnosis?.recommendedRailSwitch || 'CARD';
+
+    const interactivePayload: WhatsAppInteractivePayload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: sanitizedPhone.startsWith('91') ? sanitizedPhone : `91${sanitizedPhone}`,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        header: {
+          type: 'text',
+          text: `🛒 Complete Your Order: ₹${netAmount.toLocaleString('en-IN')}`
+        },
+        body: {
+          text: `Hi ${recoveryCase.customer.name}, you left ${checkout?.totalCartItems || 2} items in your cart${discountNote}. Your order for ${cartSummary} is waiting — complete it in 1-click:`
+        },
+        footer: {
+          text: '🔒 Verified Razorpay Channel • RecoverFlow AI'
+        },
+        action: {
+          buttons: [
+            {
+              type: 'reply',
+              reply: {
+                id: `btn_co_pay_${recoveryCase.caseId}`,
+                title: '💳 Complete Order Now'
+              }
+            },
+            {
+              type: 'reply',
+              reply: {
+                id: `btn_co_switch_${recoveryCase.caseId}`,
+                title: `🔄 Pay with ${recommendedRail}`
+              }
+            }
+          ]
+        }
+      }
+    };
+
+    const gemini = getGeminiClient();
+    if (gemini) {
+      try {
+        const response = await callGeminiWithTimeout(async () => {
+          return await gemini.models.generateContent({
+            model: 'gemini-3.7-flash',
+            contents: `You are the Checkout Recovery Communications Agent for RecoverFlow AI.
+Generate a personalized, cart-specific recovery message for an abandoned checkout.
+Context:
+- Customer Name: ${recoveryCase.customer.name}
+- Channel: ${strategy.targetChannel}
+- Cart Total: ₹${checkout?.cartValueINR || recoveryCase.amount}
+- Net Amount: ₹${netAmount}
+- Cart Items: ${cartSummary}
+- Checkout Stage Abandoned: ${(checkout?.stageReached || 'PAYMENT_SELECTION').replace(/_/g, ' ')}
+- Discount: ${strategy.offeredDiscountPct}%
+- Payment Link: ${paymentLink}
+- Device: ${checkout?.deviceType || 'mobile'}
+
+Return ONLY JSON:
+{
+  "messageBody": "The exact message copy — mention the specific cart items, keep under 300 chars for WhatsApp, mention the link",
+  "tone": "FRIENDLY_HELPFUL" | "POLITE_CONCIERGE" | "URGENT_DIRECT",
+  "confidenceScore": number (0.85 to 0.99)
+}`
+          });
+        }, 12000);
+
+        const parsed = parseGeminiJson<{
+          messageBody: string;
+          tone: string;
+        }>(response.text);
+
+        if (parsed && parsed.messageBody) {
+          return {
+            messageBody: parsed.messageBody,
+            tone: parsed.tone || 'FRIENDLY_HELPFUL',
+            modelUsed: 'gemini-3.7-flash',
+            tokensUsed: 160,
+            whatsAppInteractivePayload: interactivePayload
+          };
+        }
+      } catch (err) {
+        console.warn('Checkout Recovery Agent: Gemini copy generation fallback triggered:', err);
+      }
+    }
+
+    const fallbackCopy = `Hi ${recoveryCase.customer.name}, your cart with ${cartSummary} (₹${netAmount.toLocaleString('en-IN')}${discountNote}) is waiting. Complete your order in 1-click: ${paymentLink}`;
+
+    return {
+      messageBody: fallbackCopy,
+      tone: 'FRIENDLY_HELPFUL',
+      modelUsed: 'deterministic-rules',
+      tokensUsed: 0,
+      whatsAppInteractivePayload: interactivePayload
     };
   }
 }

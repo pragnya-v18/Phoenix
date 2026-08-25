@@ -10,7 +10,8 @@ import {
   RefreshCw,
   Zap,
   ArrowUpRight,
-  ShieldCheck
+  ShieldCheck,
+  ShoppingCart
 } from 'lucide-react';
 import { ExecutiveKPIs, BankHealthMetric } from '../types';
 
@@ -20,6 +21,8 @@ interface TopBarProps {
   bankHealth: BankHealthMetric[];
   onSimulate: (scenario: 'UPI_LIMIT' | 'SBI_DOWNTIME' | 'HIGH_VALUE_B2B' | 'SUBSCRIPTION_HALT') => void;
   onSimulateBatch?: (batchSize: number) => void;
+  onSimulateCheckout?: (scenario: 'HIGH_VALUE_CART' | 'MOBILE_FRICTION' | 'OTP_TIMEOUT' | 'PRICE_SENSITIVITY') => void;
+  onSimulateCheckoutBatch?: (batchSize: number) => void;
   isSimulating: boolean;
   timeRange: string;
   setTimeRange: (t: string) => void;
@@ -33,6 +36,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   bankHealth,
   onSimulate,
   onSimulateBatch,
+  onSimulateCheckout,
+  onSimulateCheckoutBatch,
   isSimulating,
   timeRange,
   setTimeRange,
@@ -207,6 +212,61 @@ export const TopBar: React.FC<TopBarProps> = ({
                     </div>
                     <span className="text-[11px] text-indigo-700 font-medium">
                       Simulate multi-channel failure stream & compute live recovery evidence
+                    </span>
+                  </button>
+
+                  <div className="my-1 border-t border-slate-100"></div>
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <ShoppingCart className="w-3 h-3 text-emerald-500" />
+                    Checkout Abandonment Recovery
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateCheckout) onSimulateCheckout('HIGH_VALUE_CART');
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">6. High-Value Enterprise Cart</span>
+                      <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded">₹34,999</span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">Platinum CLV, 3-item cart, abandoned at Payment Auth</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateCheckout) onSimulateCheckout('OTP_TIMEOUT');
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">7. OTP Timeout (Card 2FA)</span>
+                      <span className="text-[10px] font-mono text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded">₹12,499</span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">Session expired at OTP entry, transient — 1-click retry</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateCheckoutBatch) onSimulateCheckoutBatch(4);
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 bg-emerald-50/70 hover:bg-emerald-100/70 rounded-xl text-xs transition-colors flex flex-col gap-0.5 border border-emerald-200/60"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-emerald-950 flex items-center gap-1">
+                        <Zap className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
+                        8. Run Checkout Batch (4 Abandonments)
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-white px-1.5 py-0.2 rounded border border-emerald-200">
+                        ₹59,996
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-emerald-700 font-medium">
+                      Multi-stage checkout abandonment stream across devices
                     </span>
                   </button>
                 </div>

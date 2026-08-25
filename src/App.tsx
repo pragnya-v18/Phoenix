@@ -214,6 +214,46 @@ export function App() {
     }
   };
 
+  // Simulate checkout abandonment
+  const handleSimulateCheckout = async (scenario: 'HIGH_VALUE_CART' | 'MOBILE_FRICTION' | 'OTP_TIMEOUT' | 'PRICE_SENSITIVITY') => {
+    setIsSimulating(true);
+    try {
+      const res = await fetch('/api/simulate/checkout-abandonment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario })
+      });
+      const data = await res.json();
+      if (data.case) {
+        setSelectedCase(data.case);
+        setActiveTab('cases');
+      }
+      await fetchData();
+    } catch (err) {
+      console.error('Checkout simulation error:', err);
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
+  // Simulate batch of checkout abandonments
+  const handleSimulateCheckoutBatch = async (batchSize: number = 4) => {
+    setIsSimulating(true);
+    try {
+      await fetch('/api/simulate/checkout-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchSize })
+      });
+      await fetchData();
+      setActiveTab('dashboard');
+    } catch (err) {
+      console.error('Checkout batch simulation error:', err);
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
   if (isLoading && cases.length === 0) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
@@ -263,6 +303,8 @@ export function App() {
           bankHealth={bankHealth}
           onSimulate={handleSimulateScenario}
           onSimulateBatch={handleSimulateBatch}
+          onSimulateCheckout={handleSimulateCheckout}
+          onSimulateCheckoutBatch={handleSimulateCheckoutBatch}
           isSimulating={isSimulating}
           timeRange={timeRange}
           setTimeRange={setTimeRange}

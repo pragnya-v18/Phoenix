@@ -138,6 +138,46 @@ apiRouter.post(['/simulate/batch-stream', '/simulate/batch-failures'], async (re
   }
 });
 
+// Simulate checkout abandonment scenario
+apiRouter.post('/simulate/checkout-abandonment', async (req: Request, res: Response) => {
+  const { scenario } = req.body;
+  try {
+    const createdCase = await RazorpayService.simulateCheckoutAbandonment(
+      scenario || 'HIGH_VALUE_CART'
+    );
+    res.json({
+      success: true,
+      message: `Checkout abandonment scenario '${scenario || 'HIGH_VALUE_CART'}' ingested into Checkout Recovery pipeline`,
+      case: createdCase
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Checkout simulation failed', details: err?.message || String(err) });
+  }
+});
+
+// Simulate batch of checkout abandonments across different stages
+apiRouter.post('/simulate/checkout-batch', async (req: Request, res: Response) => {
+  const batchSize = Number(req.body.batchSize) || 4;
+  try {
+    const batchResult = await RazorpayService.simulateCheckoutBatchStream(batchSize);
+    res.json({
+      success: true,
+      message: `Simulated ${batchResult.casesCreated.length} checkout abandonments. Checkout Recovery pipelines triggered.`,
+      batchId: batchResult.batchId,
+      totalCartValueAtRiskINR: batchResult.totalCartValueAtRiskINR,
+      cases: batchResult.casesCreated
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Checkout batch simulation failed', details: err?.message || String(err) });
+  }
+});
+
+// Checkout Abandonment Recovery Analytics
+apiRouter.get('/analytics/checkout-metrics', (req: Request, res: Response) => {
+  const kpis = db.getKPIs();
+  res.json(kpis.checkoutMetrics);
+});
+
 // Detailed Revenue Recovery Analytics Evidence endpoint
 apiRouter.get(['/analytics/revenue-evidence', '/analytics/recovery-metrics'], (req: Request, res: Response) => {
   const kpis = db.getKPIs();

@@ -23,7 +23,9 @@ import {
   CaseStatus,
   ChannelRecoveryMetric,
   RootCauseRecoveryMetric,
-  ChannelType
+  ChannelType,
+  CheckoutAbandonmentMetrics,
+  CheckoutStage
 } from '../src/types.js';
 import { FinancialAccountingEngine } from './financials.js';
 
@@ -716,6 +718,92 @@ export class FirestoreDatabase {
       recoveryRatePct: rc.totalCases > 0 ? Number(((rc.recoveredCases / rc.totalCases) * 100).toFixed(1)) : 0
     })).sort((a, b) => b.revenueAtRiskINR - a.revenueAtRiskINR);
 
+    // ===================================================================
+    // CHECKOUT ABANDONMENT RECOVERY METRICS
+    // ===================================================================
+    const checkoutCases = allCases.filter(c => c.eventType === 'CHECKOUT_ABANDONED');
+    const checkoutAbandonedCount = checkoutCases.length;
+    const checkoutRecoveredCases = checkoutCases.filter(c => c.status === 'RECOVERED');
+    const checkoutRecoveredCount = checkoutRecoveredCases.length;
+    const checkoutAtRiskGMV = checkoutCases.reduce((sum, c) => sum + c.amount, 0);
+    const checkoutRecoveredGMV = checkoutRecoveredCases.reduce((sum, c) => sum + (c.outcome?.recoveredAmount || c.amount), 0);
+    const checkoutRecoveryRate = checkoutAbandonedCount > 0 ? Number(((checkoutRecoveredCount / checkoutAbandonedCount) * 100).toFixed(1)) : 0;
+    const checkoutAvgTimeSec = checkoutRecoveredCount > 0
+      ? Math.round(checkoutRecoveredCases.reduce((sum, c) => sum + (c.outcome?.timeToRecoverSeconds || 120), 0) / checkoutRecoveredCount)
+      : 180;
+
+    const stageLabels: Record<string, string> = {
+      'CART_VIEW': 'Cart Review',
+      'ADDRESS_ENTRY': 'Address Entry',
+      'PAYMENT_SELECTION': 'Payment Selection',
+      'PAYMENT_AUTHORIZATION': 'Payment Authorization',
+      'OTP_ENTRY': 'OTP / 2FA Entry',
+      'FAILED': 'Failed at Checkout'
+    };
+
+    const stageMap = new Map<string, { abandoned: number; recovered: number; atRisk: number; recoveredGmv: number }>();
+    const deviceMap = new Map<string, { abandoned: number; recovered: number }>();
+    const checkoutChannelMap = new Map<string, { attempted: number; recovered: number; gmvRecovered: number }>();
+
+    for (const c of checkoutCases) {
+      const stage = c.checkoutProfile?.stageReached || 'PAYMENT_SELECTION';
+      const device = c.checkoutProfile?.deviceType || 'mobile';
+      const channel = (c.outcome?.attributedChannel?.split('_')[0] || c.strategy?.targetChannel || 'WHATSAPP').toUpperCase();
+
+      if (!stageMap.has(stage)) stageMap.set(stage, { abandoned: 0, recovered: 0, atRisk: 0, recoveredGmv: 0 });
+      const sd = stageMap.get(stage)!;
+      sd.abandoned++;
+      sd.atRisk += c.amount;
+      if (c.status === 'RECOVERED') {
+        sd.recovered++;
+        sd.recoveredGmv += c.outcome?.recoveredAmount || c.amount;
+      }
+
+      if (!deviceMap.has(device)) deviceMap.set(device, { abandoned: 0, recovered: 0 });
+      const dd = deviceMap.get(device)!;
+      dd.abandoned++;
+      if (c.status === 'RECOVERED') dd.recovered++;
+
+      if (!checkoutChannelMap.has(channel)) checkoutChannelMap.set(channel, { attempted: 0, recovered: 0, gmvRecovered: 0 });
+      const cd = checkoutChannelMap.get(channel)!;
+      cd.attempted++;
+      if (c.status === 'RECOVERED') {
+        cd.recovered++;
+        cd.gmvRecovered += c.outcome?.recoveredAmount || c.amount;
+      }
+    }
+
+    const checkoutMetrics: CheckoutAbandonmentMetrics = {
+      totalAbandonedCheckouts: checkoutAbandonedCount,
+      totalRecoveredCheckouts: checkoutRecoveredCount,
+      checkoutRecoveryRatePct: checkoutRecoveryRate,
+      recoveredGMV_INR: Math.round(checkoutRecoveredGMV),
+      totalAtRiskGMV_INR: Math.round(checkoutAtRiskGMV),
+      avgRecoveryTimeMinutes: Number((checkoutAvgTimeSec / 60).toFixed(1)),
+      stageBreakdown: Array.from(stageMap.entries()).map(([stage, data]) => ({
+        stage: stage as CheckoutStage,
+        stageLabel: stageLabels[stage] || stage,
+        abandonedCount: data.abandoned,
+        recoveredCount: data.recovered,
+        recoveryRatePct: data.abandoned > 0 ? Number(((data.recovered / data.abandoned) * 100).toFixed(1)) : 0,
+        gmvAtRiskINR: Math.round(data.atRisk),
+        gmvRecoveredINR: Math.round(data.recoveredGmv)
+      })).sort((a, b) => b.gmvAtRiskINR - a.gmvAtRiskINR),
+      channelBreakdown: Array.from(checkoutChannelMap.entries()).map(([channel, data]) => ({
+        channel,
+        attempted: data.attempted,
+        recovered: data.recovered,
+        recoveryRatePct: data.attempted > 0 ? Number(((data.recovered / data.attempted) * 100).toFixed(1)) : 0,
+        gmvRecoveredINR: Math.round(data.gmvRecovered)
+      })).sort((a, b) => b.gmvRecoveredINR - a.gmvRecoveredINR),
+      deviceBreakdown: Array.from(deviceMap.entries()).map(([device, data]) => ({
+        device,
+        abandonedCount: data.abandoned,
+        recoveredCount: data.recovered,
+        recoveryRatePct: data.abandoned > 0 ? Number(((data.recovered / data.abandoned) * 100).toFixed(1)) : 0
+      })).sort((a, b) => b.abandonedCount - a.abandonedCount)
+    };
+
     return {
       totalRevenueAtRiskINR: Math.round(totalRevenueAtRisk),
       totalRevenueRecoveredINR: Math.round(totalRevenueRecovered),
@@ -740,6 +828,7 @@ export class FirestoreDatabase {
 
       channelMetrics,
       rootCauseMetrics,
+      checkoutMetrics,
 
       batchTimestamp: new Date().toISOString(),
       settledCasesCount: recoveredCount
@@ -1002,6 +1091,175 @@ export class FirestoreDatabase {
     this.casesCache.set(c1.caseId, c1);
     this.casesCache.set(c2.caseId, c2);
     this.casesCache.set(c3.caseId, c3);
+
+    // 2b. Checkout Abandonment Demonstration Cases
+    const c4: RecoveryCase = {
+      caseId: 'REC-CO-881',
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'CHECKOUT_ABANDONED',
+      status: 'RECOVERED',
+      amount: 7499.00,
+      currency: 'INR',
+      riskTier: 'HIGH',
+      customer: {
+        id: 'cust_co_881',
+        name: 'Ananya Krishnamurthy',
+        phone: '+91 98456 78901',
+        email: 'ananya.k@example.com',
+        clvTier: 'GOLD',
+        historicalRecoveries: 1,
+        totalLifetimeSpendINR: 52000
+      },
+      sourceEvent: {
+        orderId: 'order_co_881',
+        amount: 7499.00,
+        currency: 'INR',
+        method: 'UPI',
+        errorCode: 'CHECKOUT_ABANDONED',
+        errorDescription: 'Customer abandoned checkout at payment authorization stage after 8 min 42 sec session',
+        occurredAt: new Date(Date.now() - 1800000).toISOString(),
+        bankCode: 'HDFC'
+      },
+      checkoutProfile: {
+        checkoutId: 'chk_881_krishnamurthy',
+        sessionId: 'sess_co_881',
+        abandonedAt: new Date(Date.now() - 1800000).toISOString(),
+        lastActivityAt: new Date(Date.now() - 1800000).toISOString(),
+        stageReached: 'PAYMENT_AUTHORIZATION',
+        cartValueINR: 7499.00,
+        cartItems: [
+          { name: 'Premium Wireless Headphones', quantity: 1, priceINR: 4999 },
+          { name: 'Carrying Case', quantity: 1, priceINR: 1500 },
+          { name: 'Extended Warranty', quantity: 1, priceINR: 1000 }
+        ],
+        totalCartItems: 3,
+        deviceType: 'mobile',
+        browserSessionDurationSec: 522,
+        previousVisitCount: 3,
+        recoveryProbability: 0.78
+      },
+      diagnosis: {
+        rootCauseCategory: 'CHECKOUT_STALL',
+        rootCauseDetail: 'Customer stalled at UPI payment authorization for 8+ minutes on mobile device. Likely encountered UPI app switch friction or second thoughts on cart total.',
+        confidenceScore: 0.91,
+        isTransient: false,
+        bankCode: 'HDFC',
+        bankSwitchHealthIndex: 94.8,
+        recommendedRailSwitch: 'CARD',
+        diagnosedAt: new Date(Date.now() - 1790000).toISOString()
+      },
+      strategy: {
+        recommendedAction: 'PAYMENT_LINK_DISPATCH',
+        targetChannel: 'WHATSAPP',
+        offeredDiscountPct: 3.0,
+        calculatedIncentiveINR: 224.97,
+        delayMinutes: 0,
+        reasoning: 'High cart value (₹7,499) with 3-item basket and Gold CLV tier. Recovery probability 78% — WhatsApp interactive message with 3% instant incentive and 1-click payment link to recover abandoned cart.',
+        expectedRecoveryProbability: 0.82,
+        scheduledExecutionAt: new Date(Date.now() - 1780000).toISOString()
+      },
+      compliance: {
+        approved: true,
+        rulesPassed: ['TRAI_QUIET_HOURS_OK', 'MAX_DISCOUNT_WITHIN_CAP', 'CHECKOUT_RECOVERY_AUTHORIZED'],
+        violations: [],
+        requiresHumanApproval: false,
+        evaluatedAt: new Date(Date.now() - 1770000).toISOString()
+      },
+      outcome: {
+        isRecovered: true,
+        recoveredAmount: 7274.03,
+        settledPaymentId: 'pay_co_881_settled',
+        paymentLinkId: 'plink_co_881',
+        reconciliationMethod: 'PAYMENT_LINK_PAID_WEBHOOK',
+        recoveredAt: new Date(Date.now() - 1620000).toISOString(),
+        timeToRecoverSeconds: 180,
+        attributedChannel: 'WHATSAPP_PAYMENT_LINK',
+        costOfIncentiveINR: 224.97,
+        estimatedMdrFeeINR: 138.32,
+        mdrRatePct: 1.9,
+        businessInsights: 'Recovered ₹7,274 from abandoned 3-item cart via WhatsApp payment link with 3% incentive. Cart-level recovery protected ₹7,274 GMV and 2.0% MDR margin on this session.'
+      },
+      createdAt: new Date(Date.now() - 1800000).toISOString(),
+      updatedAt: new Date(Date.now() - 1620000).toISOString()
+    };
+
+    const c5: RecoveryCase = {
+      caseId: 'REC-CO-882',
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'CHECKOUT_ABANDONED',
+      status: 'EXECUTING',
+      amount: 24999.00,
+      currency: 'INR',
+      riskTier: 'CRITICAL',
+      customer: {
+        id: 'cust_co_882',
+        name: 'Rajeev Menon',
+        phone: '+91 98200 55667',
+        email: 'rajeev.m@enterprise.in',
+        clvTier: 'PLATINUM',
+        historicalRecoveries: 0,
+        totalLifetimeSpendINR: 320000
+      },
+      sourceEvent: {
+        orderId: 'order_co_882',
+        amount: 24999.00,
+        currency: 'INR',
+        method: 'CARD',
+        errorCode: 'CHECKOUT_ABANDONED',
+        errorDescription: 'Enterprise customer abandoned checkout at OTP entry stage after 4 min 15 sec session',
+        occurredAt: new Date(Date.now() - 960000).toISOString(),
+        bankCode: 'ICICI'
+      },
+      checkoutProfile: {
+        checkoutId: 'chk_882_menon',
+        sessionId: 'sess_co_882',
+        abandonedAt: new Date(Date.now() - 960000).toISOString(),
+        lastActivityAt: new Date(Date.now() - 960000).toISOString(),
+        stageReached: 'OTP_ENTRY',
+        cartValueINR: 24999.00,
+        cartItems: [
+          { name: 'Enterprise SaaS Annual License', quantity: 1, priceINR: 19999 },
+          { name: 'Premium Support Add-on', quantity: 1, priceINR: 5000 }
+        ],
+        totalCartItems: 2,
+        deviceType: 'desktop',
+        browserSessionDurationSec: 255,
+        previousVisitCount: 5,
+        recoveryProbability: 0.85
+      },
+      diagnosis: {
+        rootCauseCategory: 'CHECKOUT_SESSION_EXPIRED',
+        rootCauseDetail: 'Customer abandoned at OTP entry stage — likely session timeout or OTP delivery delay on ICICI corporate card. High-intent Platinum user with 5 prior visits.',
+        confidenceScore: 0.93,
+        isTransient: true,
+        bankCode: 'ICICI',
+        bankSwitchHealthIndex: 96.1,
+        recommendedRailSwitch: 'CARD',
+        diagnosedAt: new Date(Date.now() - 950000).toISOString()
+      },
+      strategy: {
+        recommendedAction: 'ACP_A2A_OFFER',
+        targetChannel: 'WHATSAPP',
+        offeredDiscountPct: 0.0,
+        calculatedIncentiveINR: 0.0,
+        delayMinutes: 0,
+        reasoning: 'Platinum enterprise customer with 5 prior visits and ₹3.2L lifetime spend. High intent — no discount needed. WhatsApp interactive button for 1-click OTP re-entry on saved card.',
+        expectedRecoveryProbability: 0.87,
+        scheduledExecutionAt: new Date(Date.now() - 940000).toISOString()
+      },
+      compliance: {
+        approved: true,
+        rulesPassed: ['TRAI_QUIET_HOURS_OK', 'CHECKOUT_RECOVERY_AUTHORIZED'],
+        violations: [],
+        requiresHumanApproval: false,
+        evaluatedAt: new Date(Date.now() - 930000).toISOString()
+      },
+      createdAt: new Date(Date.now() - 960000).toISOString(),
+      updatedAt: new Date(Date.now() - 930000).toISOString()
+    };
+
+    this.casesCache.set(c4.caseId, c4);
+    this.casesCache.set(c5.caseId, c5);
 
     // 3. Initial Audits
     const initialAudits: Omit<AuditLogEntry, 'id' | 'signatureHash' | 'timestamp'>[] = [
