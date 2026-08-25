@@ -1,0 +1,6 @@
+{
+  "name": "RecoverFlow AI",
+  "description": "Autonomous Multi-Agent Revenue Recovery Engine featuring ACP/UCP negotiation, real-time bank health telemetry, and Razorpay payment recovery orchestration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

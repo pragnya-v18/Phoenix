@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "Merchant": {
+      "title": "Merchant",
+      "description": "Registered merchant organization profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 256 },
+        "webhookUrl": { "type": "string", "maxLength": 512 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name"]
+    },
+    "RecoveryCase": {
+      "title": "RecoveryCase",
+      "description": "Failed payment recovery workflow case record",
+      "type": "object",
+      "properties": {
+        "caseId": { "type": "string", "maxLength": 128 },
+        "merchantId": { "type": "string", "maxLength": 128 },
+        "eventType": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "maxLength": 64 },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 8 },
+        "riskTier": { "type": "string", "maxLength": 32 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["caseId", "merchantId", "status", "amount"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Cryptographically verifiable tamper-evident agent execution log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "agentName": { "type": "string", "maxLength": 64 },
+        "action": { "type": "string", "maxLength": 128 },
+        "rationale": { "type": "string", "maxLength": 1024 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "signature": { "type": "string", "maxLength": 256 }
+      },
+      "required": ["id", "caseId", "agentName", "action", "timestamp", "signature"]
+    },
+    "BankHealth": {
+      "title": "BankHealth",
+      "description": "Live Indian payment bank switch telemetry index",
+      "type": "object",
+      "properties": {
+        "bankCode": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 128 },
+        "successRate": { "type": "number" },
+        "status": { "type": "string", "maxLength": 32 },
+        "latencyMs": { "type": "number" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bankCode", "name", "successRate", "status"]
+    },
+    "AnalyticsSummary": {
+      "title": "AnalyticsSummary",
+      "description": "Executive revenue recovery KPIs, cost accounting, channel performance, and measurable financial evidence",
+      "type": "object",
+      "properties": {
+        "totalRevenueAtRiskINR": { "type": "number" },
+        "totalRevenueRecoveredINR": { "type": "number" },
+        "recoveryRatePercentage": { "type": "number" },
+        "totalCasesCount": { "type": "number" },
+        "activeCasesCount": { "type": "number" },
+        "recoveredCasesCount": { "type": "number" },
+        "failedCasesCount": { "type": "number" },
+        "avgRecoveryTimeMinutes": { "type": "number" },
+        "avgRecoveryTimeSeconds": { "type": "number" },
+        "totalIncentiveCostINR": { "type": "number" },
+        "totalRecoveryCostINR": { "type": "number" },
+        "netRevenueSavedINR": { "type": "number" },
+        "recoveryROI": { "type": "number" },
+        "recoveredArrProjectedINR": { "type": "number" },
+        "netMarginProtectedINR": { "type": "number" },
+        "channelMetrics": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "rootCauseMetrics": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "batchTimestamp": { "type": "string", "format": "date-time" },
+        "settledCasesCount": { "type": "number" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["totalRevenueAtRiskINR", "totalRevenueRecoveredINR", "recoveryRatePercentage", "netRevenueSavedINR"]
+    }
+  },
+  "firestore": {
+    "/merchants/{merchantId}": {
+      "schema": "Merchant",
+      "description": "Merchants operational profile"
+    },
+    "/recoveryCases/{caseId}": {
+      "schema": "RecoveryCase",
+      "description": "Primary payment failure recovery cases"
+    },
+    "/recoveryCases/{caseId}/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Audit trail entries per case"
+    },
+    "/bankHealthMetrics/{bankCode}": {
+      "schema": "BankHealth",
+      "description": "Live Indian Bank switch telemetry"
+    },
+    "/analyticsSummaries/{summaryId}": {
+      "schema": "AnalyticsSummary",
+      "description": "Executive recovery financial metrics"
+    }
+  }
+}

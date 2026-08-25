@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isMerchantMember(merchantId) {
+      return isAuthenticated() && (
+        request.auth.token.merchantId == merchantId ||
+        request.auth.token.admin == true
+      );
+    }
+
+    function isMerchantAdmin(merchantId) {
+      return isMerchantMember(merchantId) && (
+        request.auth.token.role == 'ADMIN' ||
+        request.auth.token.admin == true
+      );
+    }
+
+    // Merchants profile and settings
+    match /merchants/{merchantId} {
+      allow read: if isMerchantMember(merchantId);
+      allow write: if isMerchantAdmin(merchantId);
+    }
+
+    // Recovery Cases - Primary operational records
+    match /recoveryCases/{caseId} {
+      allow read: if isAuthenticated();
+      // Operators can update status and human review fields; creation/deletion reserved for backend
+      allow update: if isAuthenticated() && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'humanActionNotes', 'updatedAt', 'operatorId']);
+      allow create, delete: if false;
+
+      // Immutable Audit Logs subcollection
+      match /auditLogs/{logId} {
+        allow read: if isAuthenticated();
+        allow write: if false; // Append-only by server service account
+      }
+
+      // Interventions subcollection
+      match /interventions/{interventionId} {
+        allow read: if isAuthenticated();
+        allow write: if false;
+      }
+    }
+
+    // Live Indian Bank Switch Health Telemetry
+    match /bankHealthMetrics/{bankCode} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // Aggregated Daily Metrics
+    match /analyticsSummaries/{summaryId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+  }
+}
