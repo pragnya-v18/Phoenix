@@ -16,7 +16,7 @@ import { db } from './db.js';
 import { AgentSupervisor } from './agents.js';
 import { IdempotencyService } from './idempotency.js';
 import { FinancialAccountingEngine } from './financials.js';
-import { RecoveryCase, PaymentMethod, ChannelType, CheckoutStage, CheckoutProfile } from '../src/types.js';
+import { RecoveryCase, PaymentMethod, ChannelType, CheckoutStage, CheckoutProfile, InvoiceDPD } from '../src/types.js';
 
 export interface RazorpayPaymentLinkResponse {
   id: string;
@@ -1088,5 +1088,238 @@ export class RazorpayService {
     }
 
     return { batchId, casesCreated: createdCases, totalCartValueAtRiskINR: totalCartValueAtRisk };
+  }
+
+  /**
+   * Simulate an overdue invoice scenario for B2B receivables recovery.
+   */
+  public static async simulateOverdueInvoice(
+    scenario: 'APPROVAL_DELAY' | 'PROCUREMENT_DELAY' | 'CASHFLOW_ISSUE' | 'ENTERPRISE_OVERDUE' = 'APPROVAL_DELAY'
+  ): Promise<RecoveryCase> {
+    const caseId = `REC-INV-${Date.now().toString().slice(-4)}`;
+
+    const scenarios: Record<string, {
+      contactName: string;
+      email: string;
+      phone: string;
+      tier: 'PLATINUM' | 'GOLD' | 'SILVER' | 'BRONZE';
+      amount: number;
+      method: PaymentMethod;
+      bankCode: string;
+      companyName: string;
+      gstin: string;
+      contactPerson: string;
+      invoiceNumber: string;
+      daysPastDue: number;
+      dpdBucket: InvoiceDPD;
+      paymentTerms: string;
+      onTimeRate: number;
+      totalBusiness: number;
+      poNumber: string;
+      items: Array<{ description: string; quantity: number; unitPriceINR: number }>;
+    }> = {
+      APPROVAL_DELAY: {
+        contactName: 'Rajesh Kumar',
+        email: 'rajesh.kumar@finserve.in',
+        phone: '+91 98201 33445',
+        tier: 'GOLD',
+        amount: 87500.00,
+        method: 'NETBANKING',
+        bankCode: 'HDFC',
+        companyName: 'FinServe Solutions Pvt Ltd',
+        gstin: '27AABCF9999H1Z3',
+        contactPerson: 'Rajesh Kumar',
+        invoiceNumber: `INV-2026-FS-${1000 + Math.floor(Math.random() * 9000)}`,
+        daysPastDue: 12,
+        dpdBucket: 'OVERDUE_30',
+        paymentTerms: 'NET_30',
+        onTimeRate: 0.85,
+        totalBusiness: 2100000,
+        poNumber: `PO-FS-2026-${Math.floor(Math.random() * 999)}`,
+        items: [
+          { description: 'SaaS Platform License (Q2 2026)', quantity: 1, unitPriceINR: 65000 },
+          { description: 'Premium Support Package', quantity: 1, unitPriceINR: 22500 }
+        ]
+      },
+      PROCUREMENT_DELAY: {
+        contactName: 'Sunita Reddy',
+        email: 'sunita.r@logistics.co',
+        phone: '+91 97401 66778',
+        tier: 'SILVER',
+        amount: 145000.00,
+        method: 'NETBANKING',
+        bankCode: 'ICICI',
+        companyName: 'Swift Logistics Corp',
+        gstin: '29AABCS7777K1Z1',
+        contactPerson: 'Sunita Reddy',
+        invoiceNumber: `INV-2026-SL-${2000 + Math.floor(Math.random() * 9000)}`,
+        daysPastDue: 28,
+        dpdBucket: 'OVERDUE_30',
+        paymentTerms: 'NET_30',
+        onTimeRate: 0.60,
+        totalBusiness: 3800000,
+        poNumber: `PO-SL-2026-${Math.floor(Math.random() * 999)}`,
+        items: [
+          { description: 'Fleet Tracking System (Annual)', quantity: 1, unitPriceINR: 95000 },
+          { description: 'GPS Device Installation (50 units)', quantity: 50, unitPriceINR: 800 },
+          { description: 'Training & Onboarding', quantity: 1, unitPriceINR: 10000 }
+        ]
+      },
+      CASHFLOW_ISSUE: {
+        contactName: 'Anil Mehta',
+        email: 'anil.m@manufacturing.in',
+        phone: '+91 99302 88990',
+        tier: 'PLATINUM',
+        amount: 320000.00,
+        method: 'NETBANKING',
+        bankCode: 'SBI',
+        companyName: 'Precision Auto Components Ltd',
+        gstin: '27AABCP4444M1Z6',
+        contactPerson: 'Anil Mehta',
+        invoiceNumber: `INV-2026-PAC-${3000 + Math.floor(Math.random() * 9000)}`,
+        daysPastDue: 72,
+        dpdBucket: 'OVERDUE_90_PLUS',
+        paymentTerms: 'NET_60',
+        onTimeRate: 0.45,
+        totalBusiness: 8200000,
+        poNumber: `PO-PAC-2026-${Math.floor(Math.random() * 999)}`,
+        items: [
+          { description: 'Industrial IoT Platform License (Annual)', quantity: 1, unitPriceINR: 200000 },
+          { description: 'On-site Implementation (8 days)', quantity: 8, unitPriceINR: 12500 },
+          { description: 'Custom Sensor Integration', quantity: 1, unitPriceINR: 20000 }
+        ]
+      },
+      ENTERPRISE_OVERDUE: {
+        contactName: 'Deepa Nair',
+        email: 'deepa.nair@enterprise.com',
+        phone: '+91 98456 11223',
+        tier: 'PLATINUM',
+        amount: 580000.00,
+        method: 'NETBANKING',
+        bankCode: 'AXIS',
+        companyName: 'GlobalTech Enterprises India',
+        gstin: '29AABCG8888N1Z9',
+        contactPerson: 'Deepa Nair',
+        invoiceNumber: `INV-2026-GTE-${4000 + Math.floor(Math.random() * 9000)}`,
+        daysPastDue: 95,
+        dpdBucket: 'OVERDUE_90_PLUS',
+        paymentTerms: 'NET_90',
+        onTimeRate: 0.35,
+        totalBusiness: 15000000,
+        poNumber: '',
+        items: [
+          { description: 'Enterprise Cloud Migration (Phase 2)', quantity: 1, unitPriceINR: 350000 },
+          { description: 'Dedicated Support Engineer (3 months)', quantity: 3, unitPriceINR: 60000 },
+          { description: 'Security Audit & Compliance', quantity: 1, unitPriceINR: 30000 }
+        ]
+      }
+    };
+
+    const s = scenarios[scenario] || scenarios.APPROVAL_DELAY;
+    const now = new Date();
+    const invoiceDate = new Date(now.getTime() - (s.daysPastDue + 30) * 86400000);
+    const dueDate = new Date(invoiceDate.getTime() + (s.paymentTerms === 'NET_30' ? 30 : s.paymentTerms === 'NET_60' ? 60 : s.paymentTerms === 'NET_90' ? 90 : 30) * 86400000);
+
+    const newCase: RecoveryCase = {
+      caseId,
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'INVOICE_OVERDUE',
+      status: 'DETECTED',
+      amount: s.amount,
+      currency: 'INR',
+      riskTier: s.daysPastDue > 90 ? 'CRITICAL' : (s.daysPastDue > 60 ? 'HIGH' : (s.daysPastDue > 30 ? 'MEDIUM' : 'LOW')),
+      customer: {
+        id: `cust_inv_${Date.now()}`,
+        name: s.contactName,
+        phone: s.phone,
+        email: s.email,
+        clvTier: s.tier,
+        historicalRecoveries: s.tier === 'PLATINUM' ? 2 : (s.tier === 'GOLD' ? 1 : 0),
+        totalLifetimeSpendINR: s.totalBusiness
+      },
+      sourceEvent: {
+        invoiceId: `inv_${Date.now()}`,
+        amount: s.amount,
+        currency: 'INR',
+        method: s.method,
+        errorCode: 'INVOICE_OVERDUE',
+        errorDescription: `Invoice ${s.invoiceNumber} overdue by ${s.daysPastDue} days. Payment terms ${s.paymentTerms}. Company: ${s.companyName}.`,
+        occurredAt: invoiceDate.toISOString(),
+        bankCode: s.bankCode
+      },
+      invoiceProfile: {
+        invoiceId: `inv_${Date.now()}`,
+        invoiceNumber: s.invoiceNumber,
+        invoiceDate: invoiceDate.toISOString(),
+        dueDate: dueDate.toISOString(),
+        daysPastDue: s.daysPastDue,
+        dpdBucket: s.dpdBucket,
+        outstandingAmountINR: s.amount,
+        originalAmountINR: s.amount,
+        paymentTerms: s.paymentTerms as any,
+        companyName: s.companyName,
+        companyGstin: s.gstin,
+        contactPerson: s.contactPerson,
+        contactEmail: s.email,
+        contactPhone: s.phone,
+        invoiceItems: s.items,
+        poNumber: s.poNumber || undefined,
+        gracePeriodDays: 7,
+        totalLifetimeBusinessINR: s.totalBusiness,
+        historicalOnTimePaymentRate: s.onTimeRate,
+        recoveryProbability: 0.70
+      },
+      createdAt: invoiceDate.toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.upsertCase(newCase);
+
+    db.addAuditLog({
+      caseId: newCase.caseId,
+      agentName: 'Receivables Sentinel',
+      action: 'INVOICE_OVERDUE_INGESTED',
+      rationale: `Overdue invoice detected: ${s.invoiceNumber} (₹${s.amount.toLocaleString('en-IN')}, ${s.daysPastDue} DPD). Company: ${s.companyName}. Contact: ${s.contactPerson}. Root cause suspected: ${scenario.replace(/_/g, ' ')}. Dispatching to Receivables Recovery Agents.`,
+      model: 'receivables-sentinel',
+      latencyMs: 5,
+      tokensUsed: 0
+    });
+
+    setTimeout(async () => {
+      try {
+        await AgentSupervisor.executeRecoveryPipeline(newCase);
+      } catch (err) {
+        console.error('[RazorpayService] Receivables pipeline error:', newCase.caseId, err);
+      }
+    }, 400);
+
+    return newCase;
+  }
+
+  /**
+   * Simulate a batch of overdue invoices across different DPD buckets.
+   */
+  public static async simulateReceivablesBatchStream(batchSize: number = 4): Promise<{
+    batchId: string;
+    casesCreated: RecoveryCase[];
+    totalOutstandingINR: number;
+  }> {
+    const batchId = `INV-BATCH-${Date.now()}`;
+    const scenarios: Array<'APPROVAL_DELAY' | 'PROCUREMENT_DELAY' | 'CASHFLOW_ISSUE' | 'ENTERPRISE_OVERDUE'> = [
+      'APPROVAL_DELAY', 'PROCUREMENT_DELAY', 'CASHFLOW_ISSUE', 'ENTERPRISE_OVERDUE'
+    ];
+
+    const actualCount = Math.min(batchSize, scenarios.length);
+    const createdCases: RecoveryCase[] = [];
+    let totalOutstanding = 0;
+
+    for (let i = 0; i < actualCount; i++) {
+      const testCase = await this.simulateOverdueInvoice(scenarios[i]);
+      totalOutstanding += testCase.amount;
+      createdCases.push(testCase);
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    return { batchId, casesCreated: createdCases, totalOutstandingINR: totalOutstanding };
   }
 }

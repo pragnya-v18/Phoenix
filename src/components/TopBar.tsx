@@ -11,7 +11,8 @@ import {
   Zap,
   ArrowUpRight,
   ShieldCheck,
-  ShoppingCart
+  ShoppingCart,
+  FileText
 } from 'lucide-react';
 import { ExecutiveKPIs, BankHealthMetric } from '../types';
 
@@ -23,6 +24,8 @@ interface TopBarProps {
   onSimulateBatch?: (batchSize: number) => void;
   onSimulateCheckout?: (scenario: 'HIGH_VALUE_CART' | 'MOBILE_FRICTION' | 'OTP_TIMEOUT' | 'PRICE_SENSITIVITY') => void;
   onSimulateCheckoutBatch?: (batchSize: number) => void;
+  onSimulateInvoice?: (scenario: 'APPROVAL_DELAY' | 'PROCUREMENT_DELAY' | 'CASHFLOW_ISSUE' | 'ENTERPRISE_OVERDUE') => void;
+  onSimulateInvoiceBatch?: (batchSize: number) => void;
   isSimulating: boolean;
   timeRange: string;
   setTimeRange: (t: string) => void;
@@ -38,6 +41,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSimulateBatch,
   onSimulateCheckout,
   onSimulateCheckoutBatch,
+  onSimulateInvoice,
+  onSimulateInvoiceBatch,
   isSimulating,
   timeRange,
   setTimeRange,
@@ -265,8 +270,63 @@ export const TopBar: React.FC<TopBarProps> = ({
                         ₹59,996
                       </span>
                     </div>
-                    <span className="text-[11px] text-emerald-700 font-medium">
+                      <span className="text-[11px] text-emerald-700 font-medium">
                       Multi-stage checkout abandonment stream across devices
+                    </span>
+                  </button>
+
+                  <div className="my-1 border-t border-slate-100"></div>
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <FileText className="w-3 h-3 text-orange-500" />
+                    B2B Receivables Recovery
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateInvoice) onSimulateInvoice('APPROVAL_DELAY');
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">9. 15-Day Overdue (Approval Delay)</span>
+                      <span className="text-[10px] font-mono text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded">₹87,500</span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">Gold CLV, 85% on-time history, procurement approval stuck</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateInvoice) onSimulateInvoice('CASHFLOW_ISSUE');
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">10. 72-Day Overdue (Cash Flow Issue)</span>
+                      <span className="text-[10px] font-mono text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded">₹3,20,000</span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">Platinum CLV, 45% on-time, manufacturing sector cash crunch</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateInvoiceBatch) onSimulateInvoiceBatch(4);
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 bg-orange-50/70 hover:bg-orange-100/70 rounded-xl text-xs transition-colors flex flex-col gap-0.5 border border-orange-200/60"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-orange-950 flex items-center gap-1">
+                        <Zap className="w-3.5 h-3.5 text-orange-600 fill-orange-600" />
+                        11. Run Receivables Batch (4 Invoices)
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-orange-700 bg-white px-1.5 py-0.2 rounded border border-orange-200">
+                        ₹11,32,500
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-orange-700 font-medium">
+                      Multi-DPD overdue invoice stream across B2B accounts
                     </span>
                   </button>
                 </div>

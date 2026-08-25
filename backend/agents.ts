@@ -27,7 +27,8 @@ import {
   RiskTier,
   WhatsAppInteractivePayload,
   AntiAbusePolicyConfig,
-  CheckoutStage
+  CheckoutStage,
+  InvoiceDPD
 } from '../src/types.js';
 
 // Lazy-initialize Gemini AI client server-side with telemetry headers
@@ -180,6 +181,13 @@ export class AgentSupervisor {
     // =============================================================
     if (recoveryCase.eventType === 'CHECKOUT_ABANDONED') {
       return await this.executeCheckoutRecoveryPipeline(recoveryCase, traces, startTime);
+    }
+
+    // =============================================================
+    // INVOICE_OVERDUE: Branch to dedicated B2B Receivables Pipeline
+    // =============================================================
+    if (recoveryCase.eventType === 'INVOICE_OVERDUE') {
+      return await this.executeReceivablesRecoveryPipeline(recoveryCase, traces, startTime);
     }
 
     // =============================================================
@@ -1646,6 +1654,559 @@ Return ONLY JSON:
     return {
       messageBody: fallbackCopy,
       tone: 'FRIENDLY_HELPFUL',
+      modelUsed: 'deterministic-rules',
+      tokensUsed: 0,
+      whatsAppInteractivePayload: interactivePayload
+    };
+  }
+
+  // ===============================================================
+  // B2B RECEIVABLES RECOVERY PIPELINE
+  // ===============================================================
+  private static async executeReceivablesRecoveryPipeline(
+    recoveryCase: RecoveryCase,
+    traces: AgentExecutionTrace[],
+    startTime: number
+  ): Promise<{ updatedCase: RecoveryCase; traces: AgentExecutionTrace[] }> {
+    const invoice = recoveryCase.invoiceProfile;
+
+    // =============================================================
+    // RECEIVABLES NODE 1: Detection & DPD Classification
+    // =============================================================
+    const t0 = Date.now();
+    const detectionResult = this.runReceivablesDetectionAgent(recoveryCase);
+    recoveryCase.riskTier = detectionResult.riskTier;
+    recoveryCase.status = 'DIAGNOSING';
+    db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'receivables_detection_agent',
+      agentTitle: 'Receivables Detection Agent',
+      status: 'COMPLETED',
+      reasoning: detectionResult.reasoning,
+      latencyMs: Date.now() - t0,
+      tokensUsed: 0,
+      outputSummary: {
+        riskTier: recoveryCase.riskTier,
+        dpdBucket: detectionResult.dpdBucket,
+        daysPastDue: detectionResult.daysPastDue,
+        recoveryProbability: detectionResult.recoveryProbability,
+        model: 'deterministic-receivables-detector'
+      },
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Receivables Detection Agent',
+      action: 'INVOICE_OVERDUE_SCORED',
+      rationale: detectionResult.reasoning,
+      model: 'deterministic-receivables-detector',
+      latencyMs: Date.now() - t0,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // RECEIVABLES NODE 2: Diagnosis & Root Cause
+    // =============================================================
+    const t1 = Date.now();
+    const diagnosis = this.runReceivablesDiagnosisAgent(recoveryCase);
+    recoveryCase.diagnosis = diagnosis;
+    recoveryCase.status = 'NEGOTIATING';
+    db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'receivables_diagnosis_agent',
+      agentTitle: 'Receivables Diagnosis Agent',
+      status: 'COMPLETED',
+      reasoning: diagnosis.rootCauseDetail,
+      latencyMs: Date.now() - t1,
+      tokensUsed: 0,
+      outputSummary: diagnosis,
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Receivables Diagnosis Agent',
+      action: 'INVOICE_ROOT_CAUSE_FORENSICS',
+      rationale: diagnosis.rootCauseDetail,
+      model: 'deterministic-receivables-diagnosis',
+      latencyMs: Date.now() - t1,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // RECEIVABLES NODE 3: Strategy & Recovery Action
+    // =============================================================
+    const t2 = Date.now();
+    const strategy = this.runReceivablesStrategyAgent(recoveryCase, diagnosis);
+    recoveryCase.strategy = strategy;
+    db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'receivables_strategy_agent',
+      agentTitle: 'Receivables Strategy Agent',
+      status: 'COMPLETED',
+      reasoning: strategy.reasoning,
+      latencyMs: Date.now() - t2,
+      tokensUsed: 0,
+      outputSummary: strategy,
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Receivables Strategy Agent',
+      action: 'INVOICE_RECOVERY_PLAN',
+      rationale: strategy.reasoning,
+      model: 'deterministic-receivables-strategy',
+      latencyMs: Date.now() - t2,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // RECEIVABLES NODE 4: Compliance (reuses existing agent)
+    // =============================================================
+    const t3 = Date.now();
+    const compliance = await this.runComplianceAgent(recoveryCase, strategy);
+    recoveryCase.compliance = compliance;
+
+    if (compliance.requiresHumanApproval || !compliance.approved) {
+      recoveryCase.status = 'PENDING_APPROVAL';
+      db.upsertCase(recoveryCase);
+
+      traces.push({
+        nodeName: 'compliance_agent',
+        agentTitle: 'Compliance & Safety Agent',
+        status: 'HALTED',
+        reasoning: `Circuit breaker tripped: ${compliance.violations.join('; ')}. Routing to Human-In-The-Loop Clearance Queue.`,
+        latencyMs: Date.now() - t3,
+        tokensUsed: 220,
+        outputSummary: compliance,
+        timestamp: new Date().toISOString()
+      });
+
+      db.addAuditLog({
+        caseId: recoveryCase.caseId,
+        agentName: 'Compliance Agent',
+        action: 'INVOICE_HALT_FOR_HUMAN_APPROVAL',
+        rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
+        model: 'gemini-3.7-flash + deterministic-guardrails',
+        latencyMs: Date.now() - t3,
+        tokensUsed: 220
+      });
+
+      return { updatedCase: recoveryCase, traces };
+    }
+
+    traces.push({
+      nodeName: 'compliance_agent',
+      agentTitle: 'Compliance & Safety Agent',
+      status: 'COMPLETED',
+      reasoning: `All B2B receivables compliance checks passed.`,
+      latencyMs: Date.now() - t3,
+      tokensUsed: 220,
+      outputSummary: compliance,
+      timestamp: new Date().toISOString()
+    });
+
+    // =============================================================
+    // RECEIVABLES NODE 5: Recovery Agent (Payment Link + B2B Messaging)
+    // =============================================================
+    const t4 = Date.now();
+    recoveryCase.status = 'EXECUTING';
+    await db.upsertCase(recoveryCase);
+
+    const netAmount = Math.round(recoveryCase.amount - strategy.calculatedIncentiveINR);
+
+    const paymentLinkRes = await RazorpayService.createPaymentLink(
+      recoveryCase,
+      netAmount,
+      strategy.offeredDiscountPct,
+      strategy.targetChannel
+    );
+    const paymentLink = paymentLinkRes.short_url;
+
+    const recoveryComms = await this.runReceivablesRecoveryAgent(recoveryCase, strategy, paymentLink, netAmount);
+    if (recoveryCase.strategy) {
+      recoveryCase.strategy.generatedMessageCopy = recoveryComms.messageBody;
+      if (recoveryComms.whatsAppInteractivePayload) {
+        recoveryCase.strategy.whatsAppInteractivePayload = recoveryComms.whatsAppInteractivePayload;
+      }
+    }
+
+    await IdempotencyService.recordCustomerCampaign(recoveryCase.customer.phone || recoveryCase.customer.id, 60);
+
+    traces.push({
+      nodeName: 'receivables_recovery_agent',
+      agentTitle: 'Receivables Recovery & Dispatch Agent',
+      status: 'COMPLETED',
+      reasoning: `Synthesized B2B recovery comms [${recoveryComms.tone}]: "${recoveryComms.messageBody.slice(0, 100)}..." Dispatched via ${strategy.targetChannel}. Net payable: ₹${netAmount.toLocaleString('en-IN')}.`,
+      latencyMs: Date.now() - t4,
+      tokensUsed: 0,
+      outputSummary: {
+        paymentLink,
+        paymentLinkId: paymentLinkRes.id,
+        isLiveGenerated: paymentLinkRes.isLiveGenerated,
+        netAmount,
+        channel: strategy.targetChannel,
+        tone: recoveryComms.tone,
+        messageCopy: recoveryComms.messageBody,
+        whatsAppPayload: recoveryComms.whatsAppInteractivePayload
+      },
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Receivables Recovery Agent',
+      action: 'B2B_PAYMENT_LINK_DISPATCHED',
+      rationale: `Dispatched B2B payment link ${paymentLink} via ${strategy.targetChannel}. Invoice: ${invoice?.invoiceNumber || 'N/A'}. Outstanding: ₹${recoveryCase.amount}. Net: ₹${netAmount}.`,
+      model: 'deterministic-receivables-recovery',
+      latencyMs: Date.now() - t4,
+      tokensUsed: 0
+    });
+
+    // =============================================================
+    // RECEIVABLES NODE 6: Outcome Agent
+    // =============================================================
+    const t5 = Date.now();
+    const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+    const method = recoveryCase.sourceEvent.method || 'NETBANKING';
+    const isCorporate = netAmount >= 100000;
+    const mdrCalc = FinancialAccountingEngine.calculateMDRFee(netAmount, method, isCorporate);
+
+    recoveryCase.outcome = {
+      isRecovered: true,
+      recoveredAmount: netAmount,
+      settledPaymentId: `pay_inv_${Date.now()}`,
+      paymentLinkId: paymentLinkRes.id,
+      reconciliationMethod: paymentLinkRes.isLiveGenerated ? 'PAYMENT_LINK_PAID_WEBHOOK' : 'SIMULATOR',
+      recoveredAt: new Date().toISOString(),
+      timeToRecoverSeconds: elapsedSeconds,
+      attributedChannel: `${strategy.targetChannel}_B2B_RECEIVABLES`,
+      costOfIncentiveINR: strategy.calculatedIncentiveINR,
+      estimatedMdrFeeINR: mdrCalc.totalMdrFeeINR,
+      mdrRatePct: mdrCalc.mdrRatePct,
+      businessInsights: `B2B receivables recovery: ₹${netAmount.toLocaleString('en-IN')} captured in ${elapsedSeconds}s from overdue invoice ${invoice?.invoiceNumber || ''} (${invoice?.dpdBucket || 'OVERDUE_30'} DPD). ${strategy.targetChannel} outreach.`
+    };
+    recoveryCase.status = 'RECOVERED';
+    await db.upsertCase(recoveryCase);
+
+    traces.push({
+      nodeName: 'receivables_outcome_agent',
+      agentTitle: 'Receivables Outcome Agent',
+      status: 'COMPLETED',
+      reasoning: recoveryCase.outcome.businessInsights,
+      latencyMs: Date.now() - t5,
+      tokensUsed: 0,
+      outputSummary: recoveryCase.outcome,
+      timestamp: new Date().toISOString()
+    });
+
+    db.addAuditLog({
+      caseId: recoveryCase.caseId,
+      agentName: 'Receivables Outcome Agent',
+      action: 'INVOICE_RECOVERY_SETTLED',
+      rationale: `Settled B2B receivables for ₹${netAmount.toLocaleString('en-IN')} from ₹${recoveryCase.amount} invoice (${invoice?.invoiceNumber || 'N/A'}). MDR: ₹${mdrCalc.totalMdrFeeINR}. Channel: ${strategy.targetChannel}.`,
+      model: 'deterministic-receivables-outcome',
+      latencyMs: Date.now() - t5,
+      tokensUsed: 0
+    });
+
+    return { updatedCase: recoveryCase, traces };
+  }
+
+  // ===============================================================
+  // RECEIVABLES DETECTION AGENT (DPD Calculator & Risk Scorer)
+  // ===============================================================
+  private static runReceivablesDetectionAgent(recoveryCase: RecoveryCase): {
+    riskTier: RiskTier;
+    dpdBucket: InvoiceDPD;
+    daysPastDue: number;
+    recoveryProbability: number;
+    reasoning: string;
+  } {
+    const invoice = recoveryCase.invoiceProfile;
+    const amount = recoveryCase.amount;
+    const clvTier = recoveryCase.customer.clvTier;
+    const daysPastDue = invoice?.daysPastDue || 30;
+    const onTimeRate = invoice?.historicalOnTimePaymentRate || 0.5;
+    const totalBusiness = invoice?.totalLifetimeBusinessINR || 0;
+
+    // DPD bucket classification
+    let dpdBucket: InvoiceDPD = 'CURRENT';
+    if (daysPastDue > 90) dpdBucket = 'OVERDUE_90_PLUS';
+    else if (daysPastDue > 60) dpdBucket = 'OVERDUE_60';
+    else if (daysPastDue > 30) dpdBucket = 'OVERDUE_30';
+    else if (daysPastDue > 0) dpdBucket = 'OVERDUE_30';
+
+    // Recovery probability calculation
+    let prob = 0.50;
+
+    // DPD signal: earlier = more likely to recover
+    if (daysPastDue <= 15) prob += 0.20;
+    else if (daysPastDue <= 30) prob += 0.12;
+    else if (daysPastDue <= 60) prob += 0.05;
+    else if (daysPastDue <= 90) prob -= 0.05;
+    else prob -= 0.15;
+
+    // CLV tier signal
+    if (clvTier === 'PLATINUM') prob += 0.12;
+    else if (clvTier === 'GOLD') prob += 0.08;
+    else if (clvTier === 'SILVER') prob += 0.04;
+
+    // Historical on-time payment rate
+    if (onTimeRate >= 0.80) prob += 0.10;
+    else if (onTimeRate >= 0.60) prob += 0.05;
+    else if (onTimeRate < 0.40) prob -= 0.10;
+
+    // Invoice amount signal: very large = more follow-up needed
+    if (amount >= 500000) prob += 0.05;
+    else if (amount >= 100000) prob += 0.03;
+
+    prob = Math.max(0.15, Math.min(0.98, prob));
+
+    // Risk tier from DPD and amount
+    let riskTier: RiskTier = 'LOW';
+    if (daysPastDue > 90 || amount >= 500000) riskTier = 'CRITICAL';
+    else if (daysPastDue > 60 || amount >= 200000) riskTier = 'HIGH';
+    else if (daysPastDue > 30 || amount >= 50000) riskTier = 'MEDIUM';
+
+    // Override: Platinum always HIGH+
+    if (clvTier === 'PLATINUM' && riskTier === 'LOW') riskTier = 'HIGH';
+
+    const reasoning = `Invoice ${invoice?.invoiceNumber || 'N/A'} (₹${amount.toLocaleString('en-IN')}) at ${daysPastDue} DPD (${dpdBucket}). Company: ${invoice?.companyName || recoveryCase.customer.name}. On-time rate: ${(onTimeRate * 100).toFixed(0)}%. Recovery probability: ${(prob * 100).toFixed(0)}%.`;
+
+    return { riskTier, dpdBucket, daysPastDue, recoveryProbability: Number(prob.toFixed(2)), reasoning };
+  }
+
+  // ===============================================================
+  // RECEIVABLES DIAGNOSIS AGENT (Invoice Root Cause)
+  // ===============================================================
+  private static runReceivablesDiagnosisAgent(recoveryCase: RecoveryCase): DiagnosisRecord {
+    const invoice = recoveryCase.invoiceProfile;
+    const daysPastDue = invoice?.daysPastDue || 30;
+    const onTimeRate = invoice?.historicalOnTimePaymentRate || 0.5;
+    const amount = recoveryCase.amount;
+    const poNumber = invoice?.poNumber;
+
+    let rootCauseCategory: any = 'INVOICE_UNKNOWN';
+    let rootCauseDetail = '';
+    let isTransient = false;
+
+    // Deterministic root cause classification
+    if (daysPastDue <= 15 && onTimeRate >= 0.70) {
+      rootCauseCategory = 'INVOICE_APPROVAL_DELAY';
+      rootCauseDetail = `Short overdue (${daysPastDue} days) with strong payment history (${(onTimeRate * 100).toFixed(0)}% on-time). Likely internal approval or processing delay. High recovery confidence.`;
+      isTransient = true;
+    } else if (daysPastDue <= 30 && onTimeRate >= 0.50) {
+      rootCauseCategory = 'INVOICE_PROCUREMENT_DELAY';
+      rootCauseDetail = `Moderate overdue (${daysPastDue} days). Client has moderate payment history. Procurement or PO processing delay likely. Payment plan may be needed.`;
+      isTransient = true;
+    } else if (daysPastDue > 60 && onTimeRate < 0.60) {
+      rootCauseCategory = 'INVOICE_CASHFLOW_ISSUE';
+      rootCauseDetail = `Extended overdue (${daysPastDue} days) with poor payment history (${(onTimeRate * 100).toFixed(0)}% on-time). Cash flow constraints likely. Escalation with payment plan recommended.`;
+    } else if (!poNumber && amount >= 100000) {
+      rootCauseCategory = 'INVOICE_MISSING_PO';
+      rootCauseDetail = `High-value invoice (₹${amount.toLocaleString('en-IN')}) without matching PO number. Client may be withholding payment pending PO documentation.`;
+    } else if (daysPastDue > 90) {
+      rootCauseCategory = 'INVOICE_DISPUTE';
+      rootCauseDetail = `Invoice severely overdue (${daysPastDue} days). Potential dispute or contentious billing issue. Legal review may be required if outreach fails.`;
+    } else {
+      rootCauseCategory = 'INVOICE_UNKNOWN';
+      rootCauseDetail = `Invoice overdue ${daysPastDue} days. Root cause unclear — requires direct outreach to determine payment blocker.`;
+    }
+
+    return {
+      rootCauseCategory,
+      rootCauseDetail,
+      confidenceScore: 0.92,
+      isTransient,
+      bankCode: recoveryCase.sourceEvent.bankCode || 'HDFC',
+      bankSwitchHealthIndex: 95.0,
+      recommendedRailSwitch: 'NETBANKING',
+      diagnosedAt: new Date().toISOString()
+    };
+  }
+
+  // ===============================================================
+  // RECEIVABLES STRATEGY AGENT (Recovery Action Planner)
+  // ===============================================================
+  private static runReceivablesStrategyAgent(
+    recoveryCase: RecoveryCase,
+    diagnosis: DiagnosisRecord
+  ): StrategyRecord {
+    const invoice = recoveryCase.invoiceProfile;
+    const clvTier = recoveryCase.customer.clvTier;
+    const amount = recoveryCase.amount;
+    const daysPastDue = invoice?.daysPastDue || 30;
+    const onTimeRate = invoice?.historicalOnTimePaymentRate || 0.5;
+    const isHighValue = amount >= 200000;
+    const isPlatinum = clvTier === 'PLATINUM';
+
+    // Channel: always EMAIL for B2B, WhatsApp for follow-up
+    const channel: ChannelType = 'EMAIL';
+
+    // Determine recovery action and discount
+    let discountPct = 0;
+    let action: StrategyRecord['recommendedAction'] = 'PAYMENT_LINK_DISPATCH';
+
+    if (diagnosis.rootCauseCategory === 'INVOICE_CASHFLOW_ISSUE' && daysPastDue > 60) {
+      // Cash flow issue + high DPD: offer early payment discount
+      discountPct = isHighValue ? 2.0 : 3.0;
+    } else if (diagnosis.rootCauseCategory === 'INVOICE_DISPUTE') {
+      // Dispute: no discount, escalate
+      discountPct = 0;
+    } else if (daysPastDue <= 15) {
+      // Early stage: gentle reminder, no discount
+      discountPct = 0;
+    } else if (onTimeRate >= 0.70) {
+      // Good payer: small incentive
+      discountPct = 1.0;
+    }
+
+    discountPct = Math.min(10.0, Math.max(0, discountPct));
+    const calculatedIncentive = (amount * discountPct) / 100;
+    const netAmount = Math.round(amount - calculatedIncentive);
+
+    // Expected recovery probability
+    const baseProb = invoice?.recoveryProbability || 0.70;
+    const adjustedProb = Math.min(0.98, baseProb + (discountPct > 0 ? 0.05 : 0));
+
+    let reasoning = `B2B receivables recovery for ₹${amount.toLocaleString('en-IN')} invoice (${daysPastDue} DPD, ${diagnosis.rootCauseCategory}). `;
+    if (discountPct > 0) {
+      reasoning += `Offering ${discountPct}% early payment incentive (₹${calculatedIncentive.toFixed(2)}) to accelerate settlement. `;
+    } else {
+      reasoning += `No discount — professional outreach via ${channel} with direct payment link. `;
+    }
+    reasoning += `Expected recovery: ${(adjustedProb * 100).toFixed(0)}%.`;
+
+    return {
+      recommendedAction: action,
+      targetChannel: channel,
+      offeredDiscountPct: discountPct,
+      calculatedIncentiveINR: calculatedIncentive,
+      delayMinutes: 0,
+      reasoning,
+      expectedRecoveryProbability: adjustedProb,
+      confidenceScore: 0.91,
+      scheduledExecutionAt: new Date().toISOString()
+    };
+  }
+
+  // ===============================================================
+  // RECEIVABLES RECOVERY AGENT (B2B Professional Messaging)
+  // ===============================================================
+  private static async runReceivablesRecoveryAgent(
+    recoveryCase: RecoveryCase,
+    strategy: StrategyRecord,
+    paymentLink: string,
+    netAmount: number
+  ): Promise<{
+    messageBody: string;
+    tone: string;
+    modelUsed: string;
+    tokensUsed: number;
+    whatsAppInteractivePayload?: WhatsAppInteractivePayload;
+  }> {
+    const invoice = recoveryCase.invoiceProfile;
+    const sanitizedPhone = recoveryCase.customer.phone.replace(/[^0-9]/g, '');
+    const discountNote = strategy.offeredDiscountPct > 0 ? ` with ${strategy.offeredDiscountPct}% early payment discount` : '';
+    const companyName = invoice?.companyName || 'your company';
+
+    // WhatsApp interactive payload for B2B
+    const interactivePayload: WhatsAppInteractivePayload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: sanitizedPhone.startsWith('91') ? sanitizedPhone : `91${sanitizedPhone}`,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        header: {
+          type: 'text',
+          text: `📋 Payment Reminder: ₹${netAmount.toLocaleString('en-IN')}`
+        },
+        body: {
+          text: `Dear ${invoice?.contactPerson || recoveryCase.customer.name}, this is a friendly reminder for overdue invoice ${invoice?.invoiceNumber || 'N/A'} (${invoice?.daysPastDue || 0} days past due) from ${companyName}. Amount due: ₹${netAmount.toLocaleString('en-IN')}${discountNote}. Please settle via the secure payment link below.`
+        },
+        footer: {
+          text: '🔒 Verified Razorpay B2B Channel • RecoverFlow AI'
+        },
+        action: {
+          buttons: [
+            {
+              type: 'reply',
+              reply: {
+                id: `btn_inv_pay_${recoveryCase.caseId}`,
+                title: '💳 Pay Now'
+              }
+            },
+            {
+              type: 'reply',
+              reply: {
+                id: `btn_inv_plan_${recoveryCase.caseId}`,
+                title: '📅 Request Payment Plan'
+              }
+            }
+          ]
+        }
+      }
+    };
+
+    const gemini = getGeminiClient();
+    if (gemini) {
+      try {
+        const response = await callGeminiWithTimeout(async () => {
+          return await gemini.models.generateContent({
+            model: 'gemini-3.7-flash',
+            contents: `You are the B2B Receivables Recovery Communications Agent for RecoverFlow AI.
+Generate a professional, courteous B2B payment reminder email/message.
+Context:
+- Contact Person: ${invoice?.contactPerson || recoveryCase.customer.name}
+- Company: ${companyName}
+- Invoice Number: ${invoice?.invoiceNumber || 'N/A'}
+- Outstanding Amount: ₹${netAmount.toLocaleString('en-IN')} (Original: ₹${recoveryCase.amount.toLocaleString('en-IN')})
+- Days Past Due: ${invoice?.daysPastDue || 0}
+- Payment Terms: ${invoice?.paymentTerms || 'NET_30'}
+- Discount: ${strategy.offeredDiscountPct}%
+- Payment Link: ${paymentLink}
+- Root Cause: ${recoveryCase.diagnosis?.rootCauseDetail || 'Payment overdue'}
+
+Return ONLY JSON:
+{
+  "messageBody": "The exact professional B2B message copy — mention invoice number, amount, company name, payment terms, and the payment link. Keep under 400 chars for WhatsApp, professional tone.",
+  "tone": "PROFESSIONAL_COURTEOUS" | "FIRM_ESCALATION" | "FRIENDLY_HELPFUL",
+  "confidenceScore": number (0.85 to 0.99)
+}`
+          });
+        }, 12000);
+
+        const parsed = parseGeminiJson<{
+          messageBody: string;
+          tone: string;
+        }>(response.text);
+
+        if (parsed && parsed.messageBody) {
+          return {
+            messageBody: parsed.messageBody,
+            tone: parsed.tone || 'PROFESSIONAL_COURTEOUS',
+            modelUsed: 'gemini-3.7-flash',
+            tokensUsed: 170,
+            whatsAppInteractivePayload: interactivePayload
+          };
+        }
+      } catch (err) {
+        console.warn('Receivables Recovery Agent: Gemini copy generation fallback triggered:', err);
+      }
+    }
+
+    const fallbackCopy = `Dear ${invoice?.contactPerson || recoveryCase.customer.name}, this is a payment reminder for overdue invoice ${invoice?.invoiceNumber || 'N/A'} (${invoice?.daysPastDue || 0} days past due). Amount: ₹${netAmount.toLocaleString('en-IN')}${discountNote}. Please settle via: ${paymentLink}. For queries, contact us. Thank you, ${companyName} Accounts Team.`;
+
+    return {
+      messageBody: fallbackCopy,
+      tone: 'PROFESSIONAL_COURTEOUS',
       modelUsed: 'deterministic-rules',
       tokensUsed: 0,
       whatsAppInteractivePayload: interactivePayload

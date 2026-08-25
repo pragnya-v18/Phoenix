@@ -178,6 +178,46 @@ apiRouter.get('/analytics/checkout-metrics', (req: Request, res: Response) => {
   res.json(kpis.checkoutMetrics);
 });
 
+// Simulate overdue invoice scenario
+apiRouter.post('/simulate/overdue-invoice', async (req: Request, res: Response) => {
+  const { scenario } = req.body;
+  try {
+    const createdCase = await RazorpayService.simulateOverdueInvoice(
+      scenario || 'APPROVAL_DELAY'
+    );
+    res.json({
+      success: true,
+      message: `Overdue invoice scenario '${scenario || 'APPROVAL_DELAY'}' ingested into B2B Receivables Recovery pipeline`,
+      case: createdCase
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Invoice simulation failed', details: err?.message || String(err) });
+  }
+});
+
+// Simulate batch of overdue invoices across DPD buckets
+apiRouter.post('/simulate/receivables-batch', async (req: Request, res: Response) => {
+  const batchSize = Number(req.body.batchSize) || 4;
+  try {
+    const batchResult = await RazorpayService.simulateReceivablesBatchStream(batchSize);
+    res.json({
+      success: true,
+      message: `Simulated ${batchResult.casesCreated.length} overdue invoices. B2B Receivables Recovery pipelines triggered.`,
+      batchId: batchResult.batchId,
+      totalOutstandingINR: batchResult.totalOutstandingINR,
+      cases: batchResult.casesCreated
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Receivables batch simulation failed', details: err?.message || String(err) });
+  }
+});
+
+// B2B Receivables Recovery Analytics
+apiRouter.get('/analytics/receivables-metrics', (req: Request, res: Response) => {
+  const kpis = db.getKPIs();
+  res.json(kpis.receivablesMetrics);
+});
+
 // Detailed Revenue Recovery Analytics Evidence endpoint
 apiRouter.get(['/analytics/revenue-evidence', '/analytics/recovery-metrics'], (req: Request, res: Response) => {
   const kpis = db.getKPIs();

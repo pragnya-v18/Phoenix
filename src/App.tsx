@@ -254,6 +254,46 @@ export function App() {
     }
   };
 
+  // Simulate overdue invoice (B2B Receivables)
+  const handleSimulateInvoice = async (scenario: 'APPROVAL_DELAY' | 'PROCUREMENT_DELAY' | 'CASHFLOW_ISSUE' | 'ENTERPRISE_OVERDUE') => {
+    setIsSimulating(true);
+    try {
+      const res = await fetch('/api/simulate/overdue-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario })
+      });
+      const data = await res.json();
+      if (data.case) {
+        setSelectedCase(data.case);
+        setActiveTab('cases');
+      }
+      await fetchData();
+    } catch (err) {
+      console.error('Invoice simulation error:', err);
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
+  // Simulate batch of overdue invoices
+  const handleSimulateInvoiceBatch = async (batchSize: number = 4) => {
+    setIsSimulating(true);
+    try {
+      await fetch('/api/simulate/receivables-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchSize })
+      });
+      await fetchData();
+      setActiveTab('dashboard');
+    } catch (err) {
+      console.error('Receivables batch simulation error:', err);
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
   if (isLoading && cases.length === 0) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
@@ -305,6 +345,8 @@ export function App() {
           onSimulateBatch={handleSimulateBatch}
           onSimulateCheckout={handleSimulateCheckout}
           onSimulateCheckoutBatch={handleSimulateCheckoutBatch}
+          onSimulateInvoice={handleSimulateInvoice}
+          onSimulateInvoiceBatch={handleSimulateInvoiceBatch}
           isSimulating={isSimulating}
           timeRange={timeRange}
           setTimeRange={setTimeRange}

@@ -25,7 +25,9 @@ import {
   RootCauseRecoveryMetric,
   ChannelType,
   CheckoutAbandonmentMetrics,
-  CheckoutStage
+  CheckoutStage,
+  B2BReceivablesMetrics,
+  InvoiceDPD
 } from '../src/types.js';
 import { FinancialAccountingEngine } from './financials.js';
 
@@ -804,6 +806,94 @@ export class FirestoreDatabase {
       })).sort((a, b) => b.abandonedCount - a.abandonedCount)
     };
 
+    // ===================================================================
+    // B2B RECEIVABLES RECOVERY METRICS
+    // ===================================================================
+    const invoiceCases = allCases.filter(c => c.eventType === 'INVOICE_OVERDUE');
+    const invoiceRecoveredCases = invoiceCases.filter(c => c.status === 'RECOVERED');
+    const invoiceTotalCount = invoiceCases.length;
+    const invoiceRecoveredCount = invoiceRecoveredCases.length;
+    const invoiceOutstandingINR = invoiceCases.reduce((sum, c) => sum + c.amount, 0);
+    const invoiceRecoveredINR = invoiceRecoveredCases.reduce((sum, c) => sum + (c.outcome?.recoveredAmount || c.amount), 0);
+    const invoiceRecoveryRate = invoiceTotalCount > 0 ? Number(((invoiceRecoveredCount / invoiceTotalCount) * 100).toFixed(1)) : 0;
+    const invoiceAvgDaysToCollect = invoiceRecoveredCount > 0
+      ? Math.round(invoiceRecoveredCases.reduce((sum, c) => sum + (c.outcome?.timeToRecoverSeconds || 86400) / 86400, 0) / invoiceRecoveredCount)
+      : 12;
+
+    // Promise-to-pay tracking
+    let ptpTotal = 0;
+    let ptpKept = 0;
+    for (const c of invoiceCases) {
+      if ((c as any).promiseToPay) {
+        ptpTotal++;
+        if ((c as any).promiseToPay.status === 'KEPT') ptpKept++;
+      }
+    }
+    const ptpConversionRate = ptpTotal > 0 ? Number(((ptpKept / ptpTotal) * 100).toFixed(1)) : 0;
+
+    // Aging bucket breakdown
+    const agingMap = new Map<string, { count: number; recovered: number; outstanding: number; recoveredAmt: number }>();
+    const causeMap = new Map<string, { count: number; recovered: number }>();
+    const agingLabels: Record<string, string> = {
+      'CURRENT': 'Current (0 DPD)',
+      'OVERDUE_30': '1-30 Days Past Due',
+      'OVERDUE_60': '31-60 Days Past Due',
+      'OVERDUE_90_PLUS': '90+ Days Past Due'
+    };
+    const causeLabels: Record<string, string> = {
+      'INVOICE_APPROVAL_DELAY': 'Approval Delay',
+      'INVOICE_PROCUREMENT_DELAY': 'Procurement Delay',
+      'INVOICE_CASHFLOW_ISSUE': 'Cash Flow Issue',
+      'INVOICE_DISPUTE': 'Invoice Dispute',
+      'INVOICE_MISSING_PO': 'Missing PO',
+      'INVOICE_UNKNOWN': 'Unknown / Other'
+    };
+
+    for (const c of invoiceCases) {
+      const dpdBucket = c.invoiceProfile?.dpdBucket || 'OVERDUE_30';
+      if (!agingMap.has(dpdBucket)) agingMap.set(dpdBucket, { count: 0, recovered: 0, outstanding: 0, recoveredAmt: 0 });
+      const ad = agingMap.get(dpdBucket)!;
+      ad.count++;
+      ad.outstanding += c.amount;
+      if (c.status === 'RECOVERED') {
+        ad.recovered++;
+        ad.recoveredAmt += c.outcome?.recoveredAmount || c.amount;
+      }
+
+      const cause = c.diagnosis?.rootCauseCategory || 'INVOICE_UNKNOWN';
+      if (!causeMap.has(cause)) causeMap.set(cause, { count: 0, recovered: 0 });
+      const cd = causeMap.get(cause)!;
+      cd.count++;
+      if (c.status === 'RECOVERED') cd.recovered++;
+    }
+
+    const receivablesMetrics: B2BReceivablesMetrics = {
+      totalOverdueInvoices: invoiceTotalCount,
+      totalRecoveredInvoices: invoiceRecoveredCount,
+      receivablesRecoveryRatePct: invoiceRecoveryRate,
+      totalOutstandingINR: Math.round(invoiceOutstandingINR),
+      totalRecoveredINR: Math.round(invoiceRecoveredINR),
+      avgDaysToCollect: invoiceAvgDaysToCollect,
+      promiseToPayCount: ptpTotal,
+      promiseToPayConversionRatePct: ptpConversionRate,
+      agingBreakdown: Array.from(agingMap.entries()).map(([bucket, data]) => ({
+        bucket: bucket as InvoiceDPD,
+        bucketLabel: agingLabels[bucket] || bucket,
+        invoiceCount: data.count,
+        recoveredCount: data.recovered,
+        outstandingINR: Math.round(data.outstanding),
+        recoveredINR: Math.round(data.recoveredAmt),
+        recoveryRatePct: data.count > 0 ? Number(((data.recovered / data.count) * 100).toFixed(1)) : 0
+      })).sort((a, b) => b.outstandingINR - a.outstandingINR),
+      rootCauseBreakdown: Array.from(causeMap.entries()).map(([cause, data]) => ({
+        cause,
+        causeLabel: causeLabels[cause] || cause,
+        invoiceCount: data.count,
+        recoveredCount: data.recovered,
+        recoveryRatePct: data.count > 0 ? Number(((data.recovered / data.count) * 100).toFixed(1)) : 0
+      })).sort((a, b) => b.invoiceCount - a.invoiceCount)
+    };
+
     return {
       totalRevenueAtRiskINR: Math.round(totalRevenueAtRisk),
       totalRevenueRecoveredINR: Math.round(totalRevenueRecovered),
@@ -829,6 +919,7 @@ export class FirestoreDatabase {
       channelMetrics,
       rootCauseMetrics,
       checkoutMetrics,
+      receivablesMetrics,
 
       batchTimestamp: new Date().toISOString(),
       settledCasesCount: recoveredCount
@@ -1261,6 +1352,192 @@ export class FirestoreDatabase {
     this.casesCache.set(c4.caseId, c4);
     this.casesCache.set(c5.caseId, c5);
 
+    // 2c. B2B Receivables Invoice Demonstration Cases
+    const c6: RecoveryCase = {
+      caseId: 'REC-INV-881',
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'INVOICE_OVERDUE',
+      status: 'RECOVERED',
+      amount: 185000.00,
+      currency: 'INR',
+      riskTier: 'CRITICAL',
+      customer: {
+        id: 'cust_inv_881',
+        name: 'Vikram Patel',
+        phone: '+91 98201 22334',
+        email: 'vikram.patel@techsolutions.in',
+        clvTier: 'PLATINUM',
+        historicalRecoveries: 2,
+        totalLifetimeSpendINR: 4200000
+      },
+      sourceEvent: {
+        invoiceId: 'inv_ts_881',
+        amount: 185000.00,
+        currency: 'INR',
+        method: 'NETBANKING',
+        errorCode: 'INVOICE_OVERDUE',
+        errorDescription: 'Invoice INV-2026-TS-441 overdue by 45 days. Payment terms NET-30. Approval delay from procurement team.',
+        occurredAt: new Date(Date.now() - 3888000000).toISOString(),
+        bankCode: 'HDFC'
+      },
+      invoiceProfile: {
+        invoiceId: 'inv_ts_881',
+        invoiceNumber: 'INV-2026-TS-441',
+        invoiceDate: new Date(Date.now() - 3888000000).toISOString(),
+        dueDate: new Date(Date.now() - 1296000000).toISOString(),
+        daysPastDue: 45,
+        dpdBucket: 'OVERDUE_60',
+        outstandingAmountINR: 185000.00,
+        originalAmountINR: 185000.00,
+        paymentTerms: 'NET_30',
+        companyName: 'TechSolutions India Pvt Ltd',
+        companyGstin: '27AABCT1234F1Z5',
+        contactPerson: 'Vikram Patel',
+        contactEmail: 'vikram.patel@techsolutions.in',
+        contactPhone: '+91 98201 22334',
+        invoiceItems: [
+          { description: 'Enterprise Cloud Infrastructure (Q1 2026)', quantity: 1, unitPriceINR: 120000 },
+          { description: 'Technical Support Retainer', quantity: 3, unitPriceINR: 15000 },
+          { description: 'Data Migration Services', quantity: 1, unitPriceINR: 20000 }
+        ],
+        poNumber: 'PO-TECH-2026-088',
+        gracePeriodDays: 7,
+        totalLifetimeBusinessINR: 4200000,
+        historicalOnTimePaymentRate: 0.82,
+        recoveryProbability: 0.88
+      },
+      diagnosis: {
+        rootCauseCategory: 'INVOICE_APPROVAL_DELAY',
+        rootCauseDetail: 'Internal procurement approval delayed by 2 weeks at TechSolutions. Finance team confirmed payment upon PO re-approval. High recovery confidence — relationship account with 82% on-time history.',
+        confidenceScore: 0.94,
+        isTransient: false,
+        bankCode: 'HDFC',
+        bankSwitchHealthIndex: 94.8,
+        recommendedRailSwitch: 'NETBANKING',
+        diagnosedAt: new Date(Date.now() - 3600000).toISOString()
+      },
+      strategy: {
+        recommendedAction: 'PAYMENT_LINK_DISPATCH',
+        targetChannel: 'EMAIL',
+        offeredDiscountPct: 0,
+        calculatedIncentiveINR: 0,
+        delayMinutes: 0,
+        reasoning: 'High-value enterprise account (₹1.85L, 82% on-time history). Root cause is internal approval delay, not cash flow. Professional email with payment link + WhatsApp reminder to AP contact. No discount needed.',
+        expectedRecoveryProbability: 0.88,
+        scheduledExecutionAt: new Date(Date.now() - 3500000).toISOString()
+      },
+      compliance: {
+        approved: true,
+        rulesPassed: ['TRAI_QUIET_HOURS_OK', 'B2B_INVOICING_COMPLIANT', 'VALUE_WITHIN_AUTO_THRESHOLD'],
+        violations: [],
+        requiresHumanApproval: false,
+        evaluatedAt: new Date(Date.now() - 3400000).toISOString()
+      },
+      outcome: {
+        isRecovered: true,
+        recoveredAmount: 185000.00,
+        settledPaymentId: 'pay_inv_881_settled',
+        paymentLinkId: 'plink_inv_881',
+        reconciliationMethod: 'PAYMENT_LINK_PAID_WEBHOOK',
+        recoveredAt: new Date(Date.now() - 2592000000).toISOString(),
+        timeToRecoverSeconds: 1296000,
+        attributedChannel: 'EMAIL_PAYMENT_LINK',
+        costOfIncentiveINR: 0,
+        estimatedMdrFeeINR: 2775.00,
+        mdrRatePct: 1.5,
+        businessInsights: 'Recovered ₹1,85,000 overdue invoice from TechSolutions via professional email + payment link. Zero incentive cost. Approval-delay root cause resolved with targeted outreach to procurement contact.'
+      },
+      createdAt: new Date(Date.now() - 3888000000).toISOString(),
+      updatedAt: new Date(Date.now() - 2592000000).toISOString()
+    };
+
+    const c7: RecoveryCase = {
+      caseId: 'REC-INV-882',
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'INVOICE_OVERDUE',
+      status: 'NEGOTIATING',
+      amount: 420000.00,
+      currency: 'INR',
+      riskTier: 'CRITICAL',
+      customer: {
+        id: 'cust_inv_882',
+        name: 'Neha Agarwal',
+        phone: '+91 99302 55667',
+        email: 'neha.agarwal@manufacturing.co',
+        clvTier: 'PLATINUM',
+        historicalRecoveries: 0,
+        totalLifetimeSpendINR: 8500000
+      },
+      sourceEvent: {
+        invoiceId: 'inv_mfg_882',
+        amount: 420000.00,
+        currency: 'INR',
+        method: 'NETBANKING',
+        errorCode: 'INVOICE_OVERDUE',
+        errorDescription: 'Invoice INV-2026-MFG-112 overdue by 92 days. Payment terms NET-60. Suspected cash flow issue at client end.',
+        occurredAt: new Date(Date.now() - 7948800000).toISOString(),
+        bankCode: 'ICICI'
+      },
+      invoiceProfile: {
+        invoiceId: 'inv_mfg_882',
+        invoiceNumber: 'INV-2026-MFG-112',
+        invoiceDate: new Date(Date.now() - 7948800000).toISOString(),
+        dueDate: new Date(Date.now() - 2678400000).toISOString(),
+        daysPastDue: 92,
+        dpdBucket: 'OVERDUE_90_PLUS',
+        outstandingAmountINR: 420000.00,
+        originalAmountINR: 420000.00,
+        paymentTerms: 'NET_60',
+        companyName: 'Precision Manufacturing Ltd',
+        companyGstin: '29AABCP5678G1Z8',
+        contactPerson: 'Neha Agarwal',
+        contactEmail: 'neha.agarwal@manufacturing.co',
+        contactPhone: '+91 99302 55667',
+        invoiceItems: [
+          { description: 'Industrial IoT Platform License (Annual)', quantity: 1, unitPriceINR: 280000 },
+          { description: 'On-site Implementation Support (10 days)', quantity: 10, unitPriceINR: 12000 },
+          { description: 'Custom Dashboard Module', quantity: 1, unitPriceINR: 20000 }
+        ],
+        poNumber: 'PO-MFG-2026-201',
+        gracePeriodDays: 7,
+        totalLifetimeBusinessINR: 8500000,
+        historicalOnTimePaymentRate: 0.65,
+        recoveryProbability: 0.72
+      },
+      diagnosis: {
+        rootCauseCategory: 'INVOICE_CASHFLOW_ISSUE',
+        rootCauseDetail: 'Precision Manufacturing reports Q2 cash flow constraints. 65% historical on-time rate indicates systemic payment delays. Requires escalation with payment plan proposal and executive outreach.',
+        confidenceScore: 0.91,
+        isTransient: false,
+        bankCode: 'ICICI',
+        bankSwitchHealthIndex: 96.1,
+        recommendedRailSwitch: 'NETBANKING',
+        diagnosedAt: new Date(Date.now() - 3600000).toISOString()
+      },
+      strategy: {
+        recommendedAction: 'PAYMENT_LINK_DISPATCH',
+        targetChannel: 'EMAIL',
+        offeredDiscountPct: 2.0,
+        calculatedIncentiveINR: 8400,
+        delayMinutes: 0,
+        reasoning: 'High-value ₹4.2L invoice at 92+ DPD with cash flow root cause. Offer 2% early payment discount (₹8,400) to incentivize full settlement. Email executive outreach + WhatsApp to AP contact with payment plan option if full payment not feasible.',
+        expectedRecoveryProbability: 0.72,
+        scheduledExecutionAt: new Date(Date.now() - 3500000).toISOString()
+      },
+      compliance: {
+        approved: true,
+        rulesPassed: ['TRAI_QUIET_HOURS_OK', 'B2B_INVOICING_COMPLIANT'],
+        violations: [],
+        requiresHumanApproval: false,
+        evaluatedAt: new Date(Date.now() - 3400000).toISOString()
+      },
+      createdAt: new Date(Date.now() - 7948800000).toISOString(),
+      updatedAt: new Date(Date.now() - 3400000).toISOString()
+    };
+
+    this.casesCache.set(c6.caseId, c6);
+    this.casesCache.set(c7.caseId, c7);
+
     // 3. Initial Audits
     const initialAudits: Omit<AuditLogEntry, 'id' | 'signatureHash' | 'timestamp'>[] = [
       {
@@ -1306,6 +1583,42 @@ export class FirestoreDatabase {
         rationale: 'Payment captured via Razorpay ID pay_Ky9912bZ99. Attributed to WhatsApp ACP link.',
         model: 'deterministic-rules',
         latencyMs: 30,
+        tokensUsed: 0
+      },
+      {
+        caseId: 'REC-INV-881',
+        agentName: 'Receivables Detection Agent',
+        action: 'INVOICE_OVERDUE_DETECTED',
+        rationale: 'Invoice INV-2026-TS-441 (₹1,85,000) overdue 45 days at TechSolutions India Pvt Ltd. DPD bucket: OVERDUE_60. CLV: Platinum with 82% on-time history.',
+        model: 'deterministic-receivables-detector',
+        latencyMs: 4,
+        tokensUsed: 0
+      },
+      {
+        caseId: 'REC-INV-881',
+        agentName: 'Receivables Diagnosis Agent',
+        action: 'INVOICE_ROOT_CAUSE_FORENSICS',
+        rationale: 'Root cause: Internal procurement approval delay at client. Finance confirmed payment upon PO re-approval. Recovery confidence: 94%.',
+        model: 'deterministic-receivables-diagnosis',
+        latencyMs: 6,
+        tokensUsed: 0
+      },
+      {
+        caseId: 'REC-INV-881',
+        agentName: 'Recovery Agent',
+        action: 'B2B_PAYMENT_LINK_DISPATCHED',
+        rationale: 'Dispatched professional B2B payment link (₹1,85,000) via email to AP contact. WhatsApp reminder sent to procurement lead. Zero incentive cost.',
+        model: 'deterministic-receivables-recovery',
+        latencyMs: 12,
+        tokensUsed: 0
+      },
+      {
+        caseId: 'REC-INV-882',
+        agentName: 'Receivables Detection Agent',
+        action: 'INVOICE_OVERDUE_DETECTED',
+        rationale: 'Invoice INV-2026-MFG-112 (₹4,20,000) overdue 92 days at Precision Manufacturing. DPD bucket: OVERDUE_90_PLUS. Cash flow issue suspected.',
+        model: 'deterministic-receivables-detector',
+        latencyMs: 5,
         tokensUsed: 0
       }
     ];
