@@ -312,12 +312,13 @@ export class RazorpayService {
       const allCases = db.getAllCases();
       const refCaseId = paymentLink.notes?.caseId || paymentLink.reference_id?.split('_')[1];
       
-      const matchedCase = allCases.find(c => 
-        (refCaseId && c.caseId.toLowerCase() === refCaseId.toLowerCase()) ||
-        (paymentLink.id && c.outcome?.paymentLinkId === paymentLink.id) ||
-        (payment?.id && c.sourceEvent.paymentId === payment.id) ||
-        (payment?.order_id && c.sourceEvent.orderId === payment.order_id)
-      );
+      const matchedCase = allCases.find(c => {
+        if (c.status === 'RECOVERED' || c.status === 'DISMISSED') return false;
+        return (refCaseId && c.caseId.toLowerCase() === refCaseId.toLowerCase()) ||
+          (paymentLink.id && c.outcome?.paymentLinkId === paymentLink.id) ||
+          (payment?.id && c.sourceEvent.paymentId === payment.id) ||
+          (payment?.order_id && c.sourceEvent.orderId === payment.order_id);
+      });
 
       if (matchedCase) {
         const settledAmount = (paymentLink.amount_paid || payment?.amount || paymentLink.amount || 0) / 100;
@@ -409,8 +410,8 @@ export class RazorpayService {
     if (event === 'payment.captured' && payment) {
       const allCases = db.getAllCases();
       const matchedCase = allCases.find(c => 
-        (c.sourceEvent.paymentId === payment.id || c.sourceEvent.orderId === payment.order_id || c.caseId === payment.notes?.caseId) &&
-        c.status !== 'RECOVERED'
+        (c.sourceEvent.paymentId === payment.id || (payment.notes?.caseId && c.caseId === payment.notes.caseId)) &&
+        c.status !== 'RECOVERED' && c.status !== 'DISMISSED'
       );
 
       if (matchedCase) {
@@ -651,6 +652,20 @@ export class RazorpayService {
             latencyMs: 8,
             tokensUsed: 0
           });
+
+          if (event !== 'refund.failed' && refundAmount >= originalRecovered) {
+            pipelineJobQueue.enqueue(matchedCase);
+
+            await db.addAuditLog({
+              caseId: matchedCase.caseId,
+              agentName: 'Refund Reconciliation Agent',
+              action: 'FULL_REFUND_REOPENED_CASE',
+              rationale: `Full refund of ₹${refundAmount} (≥ original recovered ₹${originalRecovered}) reverted case to DETECTED. Recovery pipeline re-enqueued for re-attempt via payment retry.`,
+              model: 'refund-reconciliation',
+              latencyMs: 3,
+              tokensUsed: 0
+            });
+          }
 
           return {
             status: 'REFUND_RECONCILED',

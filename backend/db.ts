@@ -35,6 +35,7 @@ import {
   DeadLetterPayment
 } from '../src/types.js';
 import { FinancialAccountingEngine } from './financials.js';
+import { pipelineJobQueue } from './job-queue.js';
 
 // Read config safely
 let firebaseConfig: any = {};
@@ -292,31 +293,27 @@ export class FirestoreDatabase {
       const updatedAt = new Date(c.updatedAt).getTime();
       const elapsed = now - updatedAt;
 
-      if (elapsed > STUCK_THRESHOLD_MS) {
-        // Been EXECUTING too long — likely crashed during settlement simulation
-        // Revert to DETECTED so the pipeline job queue can re-attempt
-        c.status = 'DETECTED';
-        c.updatedAt = new Date().toISOString();
-        this.casesCache.set(caseId, c);
+      // Revert ALL stuck EXECUTING cases to DETECTED — never fabricate recovery
+      c.status = 'DETECTED';
+      c.updatedAt = new Date().toISOString();
+      this.casesCache.set(caseId, c);
 
-        console.warn(`[RecoverFlow] Case ${caseId} was stuck in EXECUTING for ${Math.round(elapsed / 1000)}s — reverted to DETECTED for retry.`);
-      } else {
-        // Recently set to EXECUTING — complete the simulated recovery
-        c.status = 'RECOVERED';
-        c.outcome = {
-          isRecovered: true,
-          recoveredAmount: c.amount,
-          settledPaymentId: `pay_recovered_${Date.now()}`,
-          recoveredAt: new Date().toISOString(),
-          timeToRecoverSeconds: Math.round(elapsed / 1000) || 5,
-          attributedChannel: 'SYSTEM_RECOVERY',
-          businessInsights: 'Case was in EXECUTING state at startup — completed simulated recovery.'
-        };
-        c.updatedAt = new Date().toISOString();
-        this.casesCache.set(caseId, c);
+      const elapsedSec = Math.round(elapsed / 1000);
+      console.warn(`[RecoverFlow] Case ${caseId} was stuck in EXECUTING for ${elapsedSec}s — reverted to DETECTED for retry.`);
 
-        console.log(`[RecoverFlow] Case ${caseId} was in EXECUTING at startup — completed recovery.`);
-      }
+      // Audit trail for stuck execution recovery
+      this.addAuditLog({
+        caseId,
+        agentName: 'Startup Recovery Agent',
+        action: 'STUCK_EXECUTION_RECOVERED',
+        rationale: `Case was stuck in EXECUTING for ${elapsedSec}s (threshold: ${STUCK_THRESHOLD_MS / 1000}s). Reverted to DETECTED. Pipeline re-enqueued for fresh recovery attempt.`,
+        model: 'deterministic-startup-recovery',
+        latencyMs: 0,
+        tokensUsed: 0
+      });
+
+      // Re-enqueue through the persistent job queue so pipeline retries
+      pipelineJobQueue.enqueue(c);
     }
   }
 
@@ -728,6 +725,13 @@ export class FirestoreDatabase {
   // =========================================================================
   public getKPIs(): ExecutiveKPIs {
     const allCases = Array.from(this.casesCache.values());
+
+    // Net recovered amount after subtracting any partial/full refunds
+    const netRecoveredAmount = (c: RecoveryCase): number => {
+      const gross = c.outcome?.recoveredAmount || c.amount;
+      const refund = c.refundState?.isRefunded ? (c.refundState.refundAmountINR || 0) : 0;
+      return Math.max(0, gross - refund);
+    };
     
     let totalRevenueAtRisk = 0;
     let totalRevenueRecovered = 0;
@@ -835,7 +839,9 @@ export class FirestoreDatabase {
       rcData.revenueAtRisk += c.amount;
 
       if (c.status === 'RECOVERED') {
-        const recAmount = c.outcome?.recoveredAmount || c.amount;
+        const grossAmount = c.outcome?.recoveredAmount || c.amount;
+        const refundDeduction = c.refundState?.isRefunded ? (c.refundState.refundAmountINR || 0) : 0;
+        const recAmount = Math.max(0, grossAmount - refundDeduction);
         const incCost = c.outcome?.costOfIncentiveINR || c.strategy?.calculatedIncentiveINR || 0;
         const timeSec = c.outcome?.timeToRecoverSeconds || 120;
         
@@ -915,7 +921,7 @@ export class FirestoreDatabase {
     const checkoutRecoveredCases = checkoutCases.filter(c => c.status === 'RECOVERED');
     const checkoutRecoveredCount = checkoutRecoveredCases.length;
     const checkoutAtRiskGMV = checkoutCases.reduce((sum, c) => sum + c.amount, 0);
-    const checkoutRecoveredGMV = checkoutRecoveredCases.reduce((sum, c) => sum + (c.outcome?.recoveredAmount || c.amount), 0);
+    const checkoutRecoveredGMV = checkoutRecoveredCases.reduce((sum, c) => sum + netRecoveredAmount(c), 0);
     const checkoutRecoveryRate = checkoutAbandonedCount > 0 ? Number(((checkoutRecoveredCount / checkoutAbandonedCount) * 100).toFixed(1)) : 0;
     const checkoutAvgTimeSec = checkoutRecoveredCount > 0
       ? Math.round(checkoutRecoveredCases.reduce((sum, c) => sum + (c.outcome?.timeToRecoverSeconds || 120), 0) / checkoutRecoveredCount)
@@ -945,7 +951,7 @@ export class FirestoreDatabase {
       sd.atRisk += c.amount;
       if (c.status === 'RECOVERED') {
         sd.recovered++;
-        sd.recoveredGmv += c.outcome?.recoveredAmount || c.amount;
+        sd.recoveredGmv += netRecoveredAmount(c);
       }
 
       if (!deviceMap.has(device)) deviceMap.set(device, { abandoned: 0, recovered: 0 });
@@ -958,7 +964,7 @@ export class FirestoreDatabase {
       cd.attempted++;
       if (c.status === 'RECOVERED') {
         cd.recovered++;
-        cd.gmvRecovered += c.outcome?.recoveredAmount || c.amount;
+        cd.gmvRecovered += netRecoveredAmount(c);
       }
     }
 
@@ -1001,7 +1007,7 @@ export class FirestoreDatabase {
     const invoiceTotalCount = invoiceCases.length;
     const invoiceRecoveredCount = invoiceRecoveredCases.length;
     const invoiceOutstandingINR = invoiceCases.reduce((sum, c) => sum + c.amount, 0);
-    const invoiceRecoveredINR = invoiceRecoveredCases.reduce((sum, c) => sum + (c.outcome?.recoveredAmount || c.amount), 0);
+    const invoiceRecoveredINR = invoiceRecoveredCases.reduce((sum, c) => sum + netRecoveredAmount(c), 0);
     const invoiceRecoveryRate = invoiceTotalCount > 0 ? Number(((invoiceRecoveredCount / invoiceTotalCount) * 100).toFixed(1)) : 0;
     const invoiceAvgDaysToCollect = invoiceRecoveredCount > 0
       ? Math.round(invoiceRecoveredCases.reduce((sum, c) => sum + (c.outcome?.timeToRecoverSeconds || 86400) / 86400, 0) / invoiceRecoveredCount)
@@ -1044,7 +1050,7 @@ export class FirestoreDatabase {
       ad.outstanding += c.amount;
       if (c.status === 'RECOVERED') {
         ad.recovered++;
-        ad.recoveredAmt += c.outcome?.recoveredAmount || c.amount;
+        ad.recoveredAmt += netRecoveredAmount(c);
       }
 
       const cause = c.diagnosis?.rootCauseCategory || 'INVOICE_UNKNOWN';
