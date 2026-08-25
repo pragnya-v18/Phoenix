@@ -12,7 +12,8 @@ import {
   ArrowUpRight,
   ShieldCheck,
   ShoppingCart,
-  FileText
+  FileText,
+  Phone
 } from 'lucide-react';
 import { ExecutiveKPIs, BankHealthMetric } from '../types';
 
@@ -26,6 +27,8 @@ interface TopBarProps {
   onSimulateCheckoutBatch?: (batchSize: number) => void;
   onSimulateInvoice?: (scenario: 'APPROVAL_DELAY' | 'PROCUREMENT_DELAY' | 'CASHFLOW_ISSUE' | 'ENTERPRISE_OVERDUE') => void;
   onSimulateInvoiceBatch?: (batchSize: number) => void;
+  onSimulateVoiceCall?: (eventType: 'PAYMENT_FAILED' | 'CHECKOUT_ABANDONED' | 'INVOICE_OVERDUE', language?: 'ENGLISH' | 'HINGLISH' | 'HINDI', tone?: 'PROFESSIONAL' | 'EMPATHETIC' | 'URGENT' | 'FRIENDLY' | 'CORPORATE') => void;
+  onSimulateVoiceBatch?: (batchSize: number) => void;
   isSimulating: boolean;
   timeRange: string;
   setTimeRange: (t: string) => void;
@@ -43,6 +46,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSimulateCheckoutBatch,
   onSimulateInvoice,
   onSimulateInvoiceBatch,
+  onSimulateVoiceCall,
+  onSimulateVoiceBatch,
   isSimulating,
   timeRange,
   setTimeRange,
@@ -325,8 +330,77 @@ export const TopBar: React.FC<TopBarProps> = ({
                         ₹11,32,500
                       </span>
                     </div>
-                    <span className="text-[11px] text-orange-700 font-medium">
+                      <span className="text-[11px] text-orange-700 font-medium">
                       Multi-DPD overdue invoice stream across B2B accounts
+                    </span>
+                  </button>
+
+                  <div className="my-1 border-t border-slate-100"></div>
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <Phone className="w-3 h-3 text-violet-500" />
+                    Voice Recovery Agent (Hinglish)
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateVoiceCall) onSimulateVoiceCall('PAYMENT_FAILED', 'HINGLISH', 'FRIENDLY');
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">12. UPI Fail → Hinglish Voice Call</span>
+                      <span className="text-[10px] font-mono text-violet-700 bg-violet-50 px-1.5 py-0.2 rounded">₹2,499</span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">Insufficient funds, friendly tone, promise-to-pay flow</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateVoiceCall) onSimulateVoiceCall('CHECKOUT_ABANDONED', 'ENGLISH', 'PROFESSIONAL');
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">13. Cart Abandon → English Voice Call</span>
+                      <span className="text-[10px] font-mono text-violet-700 bg-violet-50 px-1.5 py-0.2 rounded">₹14,999</span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">High-value desktop checkout, 5% discount offered</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateVoiceCall) onSimulateVoiceCall('INVOICE_OVERDUE', 'HINGLISH', 'EMPATHETIC');
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">14. Overdue Invoice → Hinglish Voice Call</span>
+                      <span className="text-[10px] font-mono text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded">₹87,500</span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">45-day overdue, empathetic tone, 2% settlement offer</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onSimulateVoiceBatch) onSimulateVoiceBatch(4);
+                      setShowSimMenu(false);
+                    }}
+                    className="w-full text-left p-2.5 bg-violet-50/70 hover:bg-violet-100/70 rounded-xl text-xs transition-colors flex flex-col gap-0.5 border border-violet-200/60"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-violet-950 flex items-center gap-1">
+                        <Zap className="w-3.5 h-3.5 text-violet-600 fill-violet-600" />
+                        15. Run Voice Batch (4 Calls)
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-violet-700 bg-white px-1.5 py-0.2 rounded border border-violet-200">
+                        ₹1,12,998
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-violet-700 font-medium">
+                      Multi-language voice recovery stream across all event types
                     </span>
                   </button>
                 </div>

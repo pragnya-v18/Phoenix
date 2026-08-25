@@ -218,6 +218,49 @@ apiRouter.get('/analytics/receivables-metrics', (req: Request, res: Response) =>
   res.json(kpis.receivablesMetrics);
 });
 
+// Simulate voice recovery call
+apiRouter.post('/simulate/voice-call', async (req: Request, res: Response) => {
+  const { eventType, language, tone, outcome } = req.body;
+  try {
+    const createdCase = await AgentSupervisor.simulateVoiceCall(
+      eventType || 'PAYMENT_FAILED',
+      language || 'HINGLISH',
+      tone || 'FRIENDLY',
+      outcome
+    );
+    res.json({
+      success: true,
+      message: `Voice call simulated for ${eventType || 'PAYMENT_FAILED'} (${language || 'HINGLISH'}, ${tone || 'FRIENDLY'}). Outcome: ${createdCase.voiceProfile?.outcome || 'UNKNOWN'}`,
+      case: createdCase
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Voice call simulation failed', details: err?.message || String(err) });
+  }
+});
+
+// Simulate batch of voice calls
+apiRouter.post('/simulate/voice-batch', async (req: Request, res: Response) => {
+  const batchSize = Number(req.body.batchSize) || 4;
+  try {
+    const batchResult = await AgentSupervisor.simulateVoiceBatch(batchSize);
+    res.json({
+      success: true,
+      message: `Simulated ${batchResult.casesCreated.length} voice recovery calls. Total call value: ₹${batchResult.totalCallValueINR.toLocaleString('en-IN')}.`,
+      batchId: batchResult.batchId,
+      totalCallValueINR: batchResult.totalCallValueINR,
+      cases: batchResult.casesCreated
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Voice batch simulation failed', details: err?.message || String(err) });
+  }
+});
+
+// Voice Recovery Analytics
+apiRouter.get('/analytics/voice-metrics', (req: Request, res: Response) => {
+  const kpis = db.getKPIs();
+  res.json(kpis.voiceMetrics);
+});
+
 // Detailed Revenue Recovery Analytics Evidence endpoint
 apiRouter.get(['/analytics/revenue-evidence', '/analytics/recovery-metrics'], (req: Request, res: Response) => {
   const kpis = db.getKPIs();

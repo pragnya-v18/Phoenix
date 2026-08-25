@@ -13,7 +13,8 @@ export type CaseStatus =
   | 'OUTAGE_PAUSED'
   | 'RECOVERED'
   | 'FAILED'
-  | 'DISMISSED';
+  | 'DISMISSED'
+  | 'FOLLOWING_UP';
 
 export type RiskTier = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
@@ -21,7 +22,7 @@ export type CLVTier = 'PLATINUM' | 'GOLD' | 'SILVER' | 'BRONZE';
 
 export type PaymentMethod = 'UPI' | 'CARD' | 'NETBANKING' | 'NACH_MANDATE' | 'WALLET';
 
-export type ChannelType = 'WHATSAPP' | 'SMS' | 'EMAIL' | 'DIRECT_RETRY' | 'VOICE_CALL' | 'ACP_A2A';
+export type ChannelType = 'WHATSAPP' | 'SMS' | 'EMAIL' | 'DIRECT_RETRY' | 'VOICE_CALL' | 'VOICE' | 'ACP_A2A';
 
 export type RootCauseCategory = 
   | 'ISSUER_DOWNTIME'
@@ -35,6 +36,7 @@ export type RootCauseCategory =
   | 'CHECKOUT_PAYMENT_DECLINE'
   | 'CHECKOUT_SESSION_EXPIRED'
   | 'CHECKOUT_PRICE_SENSITIVITY'
+  | 'STICKY_CHECKOUT'
   | 'INVOICE_APPROVAL_DELAY'
   | 'INVOICE_PROCUREMENT_DELAY'
   | 'INVOICE_CASHFLOW_ISSUE'
@@ -195,6 +197,81 @@ export interface PromiseToPayCommitment {
   updatedAt: string;
 }
 
+// ================================================================
+// VOICE RECOVERY AGENT TYPES
+// ================================================================
+
+export type VoiceCallOutcome = 'ANSWERED' | 'NO_ANSWER' | 'CALLBACK_REQUESTED' | 'PROMISE_TO_PAY' | 'REJECTED';
+
+export type VoiceLanguageVariant = 'ENGLISH' | 'HINGLISH' | 'HINDI';
+
+export type VoiceToneVariant = 'PROFESSIONAL' | 'EMPATHETIC' | 'URGENT' | 'FRIENDLY' | 'CORPORATE';
+
+export interface VoiceScriptSegment {
+  segment: 'GREETING' | 'ISSUE_EXPLANATION' | 'RECOVERY_OFFER' | 'PAYMENT_CTA' | 'FOLLOW_UP' | 'CLOSING';
+  textEN: string;
+  textHinglish: string;
+  textHindi: string;
+}
+
+export interface VoiceAgentProfile {
+  agentId: string;
+  caseId: string;
+  phoneNumber: string;
+  callerName: string;
+  languageVariant: VoiceLanguageVariant;
+  toneVariant: VoiceToneVariant;
+  scriptSegments: VoiceScriptSegment[];
+  retryCount: number;
+  maxRetries: number;
+  callStartedAt: string;
+  callEndedAt?: string;
+  callDurationSeconds?: number;
+  outcome?: VoiceCallOutcome;
+  outcomeReason?: string;
+  promisedPaymentDate?: string;
+  promisedAmountINR?: number;
+  followUpScheduledAt?: string;
+  dnis: string; // dialed number identification service
+  ani: string;  // automatic number identification
+  campaignId: string;
+}
+
+export interface VoiceAnalytics {
+  totalCallsPlaced: number;
+  totalCallsAnswered: number;
+  totalCallsNoAnswer: number;
+  totalCallbacksRequested: number;
+  totalPromisesToPay: number;
+  totalRejected: number;
+  callSuccessRatePct: number;
+  callbackConversionRatePct: number;
+  promiseToPayConversionRatePct: number;
+  avgCallDurationSeconds: number;
+  totalCallCostINR: number;
+  avgCostPerCallINR: number;
+  revenueRecoveredViaVoiceINR: number;
+  costPerRecoveryINR: number;
+  languageBreakdown: Array<{
+    variant: VoiceLanguageVariant;
+    label: string;
+    callCount: number;
+    successRatePct: number;
+    ptpRatePct: number;
+  }>;
+  outcomeBreakdown: Array<{
+    outcome: VoiceCallOutcome;
+    label: string;
+    count: number;
+    pct: number;
+  }>;
+  retryStats: {
+    avgRetriesBeforeAnswer: number;
+    firstAttemptSuccessPct: number;
+    retrySuccessPct: number;
+  };
+}
+
 export interface InvoiceProfile {
   invoiceId: string;
   invoiceNumber: string;
@@ -275,7 +352,7 @@ export interface DiagnosisRecord {
 }
 
 export interface StrategyRecord {
-  recommendedAction: 'ACP_A2A_OFFER' | 'AUTO_SCHEDULED_RETRY' | 'PAYMENT_LINK_DISPATCH' | 'DISMISS';
+  recommendedAction: 'ACP_A2A_OFFER' | 'AUTO_SCHEDULED_RETRY' | 'PAYMENT_LINK_DISPATCH' | 'VOICE_CALL' | 'DISMISS';
   targetChannel: ChannelType;
   offeredDiscountPct: number;
   calculatedIncentiveINR: number;
@@ -329,7 +406,7 @@ export interface OutcomeRecord {
   recoveredAmount: number;
   settledPaymentId?: string;
   paymentLinkId?: string;
-  reconciliationMethod?: 'PAYMENT_LINK_PAID_WEBHOOK' | 'PAYMENT_CAPTURED_WEBHOOK' | 'MANUAL_CALLBACK' | 'SIMULATOR';
+  reconciliationMethod?: 'PAYMENT_LINK_PAID_WEBHOOK' | 'PAYMENT_CAPTURED_WEBHOOK' | 'MANUAL_CALLBACK' | 'VOICE_PROMISE_TO_PAY' | 'VOICE_PROMISE_UPI_RETRY' | 'VOICE_LINK_PAID_WEBHOOK' | 'SIMULATOR';
   recoveredAt?: string;
   timeToRecoverSeconds?: number;
   attributedChannel?: string;
@@ -372,6 +449,7 @@ export interface RecoveryCase {
   outcome?: OutcomeRecord;
   checkoutProfile?: CheckoutProfile;
   invoiceProfile?: InvoiceProfile;
+  voiceProfile?: VoiceAgentProfile;
   humanActionNotes?: string;
   operatorId?: string;
   cooldownStatus?: {
@@ -462,8 +540,11 @@ export interface ExecutiveKPIs {
 
   // 6. B2B Receivables Recovery Metrics
   receivablesMetrics: B2BReceivablesMetrics;
+
+  // 7. Voice Recovery Agent Metrics
+  voiceMetrics: VoiceAnalytics;
   
-  // 7. Batch Verification Metadata
+  // 8. Batch Verification Metadata
   batchTimestamp: string;
   settledCasesCount: number;
 }

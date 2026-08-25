@@ -294,6 +294,50 @@ export function App() {
     }
   };
 
+  // Simulate voice recovery call
+  const handleSimulateVoiceCall = async (
+    eventType: 'PAYMENT_FAILED' | 'CHECKOUT_ABANDONED' | 'INVOICE_OVERDUE',
+    language: 'ENGLISH' | 'HINGLISH' | 'HINDI' = 'HINGLISH',
+    tone: 'PROFESSIONAL' | 'EMPATHETIC' | 'URGENT' | 'FRIENDLY' | 'CORPORATE' = 'FRIENDLY'
+  ) => {
+    setIsSimulating(true);
+    try {
+      const res = await fetch('/api/simulate/voice-call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventType, language, tone })
+      });
+      const data = await res.json();
+      if (data.case) {
+        setSelectedCase(data.case);
+        setActiveTab('cases');
+      }
+      await fetchData();
+    } catch (err) {
+      console.error('Voice call simulation error:', err);
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
+  // Simulate batch of voice calls
+  const handleSimulateVoiceBatch = async (batchSize: number = 4) => {
+    setIsSimulating(true);
+    try {
+      await fetch('/api/simulate/voice-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchSize })
+      });
+      await fetchData();
+      setActiveTab('dashboard');
+    } catch (err) {
+      console.error('Voice batch simulation error:', err);
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
   if (isLoading && cases.length === 0) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
@@ -347,6 +391,8 @@ export function App() {
           onSimulateCheckoutBatch={handleSimulateCheckoutBatch}
           onSimulateInvoice={handleSimulateInvoice}
           onSimulateInvoiceBatch={handleSimulateInvoiceBatch}
+          onSimulateVoiceCall={handleSimulateVoiceCall}
+          onSimulateVoiceBatch={handleSimulateVoiceBatch}
           isSimulating={isSimulating}
           timeRange={timeRange}
           setTimeRange={setTimeRange}

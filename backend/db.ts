@@ -27,7 +27,11 @@ import {
   CheckoutAbandonmentMetrics,
   CheckoutStage,
   B2BReceivablesMetrics,
-  InvoiceDPD
+  InvoiceDPD,
+  VoiceAnalytics,
+  VoiceAgentProfile,
+  VoiceCallOutcome,
+  VoiceLanguageVariant
 } from '../src/types.js';
 import { FinancialAccountingEngine } from './financials.js';
 
@@ -894,6 +898,107 @@ export class FirestoreDatabase {
       })).sort((a, b) => b.invoiceCount - a.invoiceCount)
     };
 
+    // ================================================================
+    // 7. VOICE RECOVERY AGENT ANALYTICS
+    // ================================================================
+    const voiceCases = allCases.filter(c => c.voiceProfile);
+    const totalCallsPlaced = voiceCases.reduce((sum, c) => {
+      const v = c.voiceProfile!;
+      return sum + (v.retryCount > 0 ? v.retryCount : (v.outcome ? 1 : 0));
+    }, 0);
+    const totalCallsAnswered = voiceCases.filter(c => c.voiceProfile?.outcome === 'ANSWERED' || c.voiceProfile?.outcome === 'PROMISE_TO_PAY' || c.voiceProfile?.outcome === 'CALLBACK_REQUESTED' || c.voiceProfile?.outcome === 'REJECTED').length;
+    const totalCallsNoAnswer = voiceCases.filter(c => c.voiceProfile?.outcome === 'NO_ANSWER').length;
+    const totalCallbacksRequested = voiceCases.filter(c => c.voiceProfile?.outcome === 'CALLBACK_REQUESTED').length;
+    const totalPromisesToPay = voiceCases.filter(c => c.voiceProfile?.outcome === 'PROMISE_TO_PAY').length;
+    const totalRejected = voiceCases.filter(c => c.voiceProfile?.outcome === 'REJECTED').length;
+    const voiceRecoveredCases = voiceCases.filter(c => c.voiceProfile?.outcome === 'PROMISE_TO_PAY' && c.outcome?.isRecovered);
+    const voiceRecoveredAmount = voiceRecoveredCases.reduce((sum, c) => sum + (c.outcome?.recoveredAmount || 0), 0);
+    const callSuccessRate = totalCallsPlaced > 0 ? Number(((totalCallsAnswered / totalCallsPlaced) * 100).toFixed(1)) : 0;
+    const callbackConversion = totalCallsAnswered > 0 ? Number(((totalCallbacksRequested / totalCallsAnswered) * 100).toFixed(1)) : 0;
+    const ptpConversion = totalCallsAnswered > 0 ? Number(((totalPromisesToPay / totalCallsAnswered) * 100).toFixed(1)) : 0;
+    const avgCallDuration = voiceCases.filter(c => c.voiceProfile?.callDurationSeconds).reduce((sum, c) => sum + (c.voiceProfile!.callDurationSeconds || 0), 0) / (voiceCases.filter(c => c.voiceProfile?.callDurationSeconds).length || 1);
+    const totalCallCost = voiceCases.reduce((sum, c) => {
+      const dur = c.voiceProfile?.callDurationSeconds || 0;
+      return sum + (dur * 0.002); // ₹0.002 per second voice cost
+    }, 0);
+    const avgCostPerCall = totalCallsPlaced > 0 ? Number((totalCallCost / totalCallsPlaced).toFixed(2)) : 0;
+    const costPerRecovery = voiceRecoveredCases.length > 0 ? Number((totalCallCost / voiceRecoveredCases.length).toFixed(2)) : 0;
+
+    const langMap = new Map<VoiceLanguageVariant, { calls: number; answered: number; ptp: number }>();
+    const outcomeMap = new Map<VoiceCallOutcome, number>();
+    let totalRetrySum = 0;
+    let firstAttemptSuccesses = 0;
+    let retrySuccesses = 0;
+
+    for (const c of voiceCases) {
+      const v = c.voiceProfile!;
+      if (v.outcome) {
+        outcomeMap.set(v.outcome, (outcomeMap.get(v.outcome) || 0) + 1);
+      }
+      const lang = v.languageVariant;
+      const existing = langMap.get(lang) || { calls: 0, answered: 0, ptp: 0 };
+      existing.calls++;
+      if (v.outcome === 'ANSWERED' || v.outcome === 'PROMISE_TO_PAY' || v.outcome === 'CALLBACK_REQUESTED' || v.outcome === 'REJECTED') {
+        existing.answered++;
+      }
+      if (v.outcome === 'PROMISE_TO_PAY') {
+        existing.ptp++;
+      }
+      langMap.set(lang, existing);
+      totalRetrySum += v.retryCount;
+      if (v.retryCount <= 1 && (v.outcome === 'PROMISE_TO_PAY' || v.outcome === 'ANSWERED')) {
+        firstAttemptSuccesses++;
+      }
+      if (v.retryCount > 1 && (v.outcome === 'PROMISE_TO_PAY' || v.outcome === 'ANSWERED')) {
+        retrySuccesses++;
+      }
+    }
+
+    const firstAttemptSuccessPct = totalCallsPlaced > 0 ? Number(((firstAttemptSuccesses / totalCallsPlaced) * 100).toFixed(1)) : 0;
+    const retrySuccessPct = totalCallsPlaced > 0 ? Number(((retrySuccesses / totalCallsPlaced) * 100).toFixed(1)) : 0;
+    const avgRetriesBeforeAnswer = voiceCases.length > 0 ? Number((totalRetrySum / voiceCases.length).toFixed(1)) : 0;
+
+    const langLabels: Record<VoiceLanguageVariant, string> = { ENGLISH: 'English', HINGLISH: 'Hinglish', HINDI: 'Hindi' };
+    const outcomeLabels: Record<VoiceCallOutcome, string> = {
+      ANSWERED: 'Answered', NO_ANSWER: 'No Answer', CALLBACK_REQUESTED: 'Callback Requested',
+      PROMISE_TO_PAY: 'Promise to Pay', REJECTED: 'Rejected'
+    };
+
+    const voiceMetrics: VoiceAnalytics = {
+      totalCallsPlaced,
+      totalCallsAnswered,
+      totalCallsNoAnswer,
+      totalCallbacksRequested,
+      totalPromisesToPay,
+      totalRejected,
+      callSuccessRatePct: callSuccessRate,
+      callbackConversionRatePct: callbackConversion,
+      promiseToPayConversionRatePct: ptpConversion,
+      avgCallDurationSeconds: Math.round(avgCallDuration),
+      totalCallCostINR: Math.round(totalCallCost * 100) / 100,
+      avgCostPerCallINR: avgCostPerCall,
+      revenueRecoveredViaVoiceINR: Math.round(voiceRecoveredAmount),
+      costPerRecoveryINR: costPerRecovery,
+      languageBreakdown: Array.from(langMap.entries()).map(([variant, data]) => ({
+        variant,
+        label: langLabels[variant],
+        callCount: data.calls,
+        successRatePct: data.calls > 0 ? Number(((data.answered / data.calls) * 100).toFixed(1)) : 0,
+        ptpRatePct: data.calls > 0 ? Number(((data.ptp / data.calls) * 100).toFixed(1)) : 0
+      })).sort((a, b) => b.callCount - a.callCount),
+      outcomeBreakdown: Array.from(outcomeMap.entries()).map(([outcome, count]) => ({
+        outcome,
+        label: outcomeLabels[outcome],
+        count,
+        pct: totalCallsPlaced > 0 ? Number(((count / totalCallsPlaced) * 100).toFixed(1)) : 0
+      })).sort((a, b) => b.count - a.count),
+      retryStats: {
+        avgRetriesBeforeAnswer,
+        firstAttemptSuccessPct,
+        retrySuccessPct
+      }
+    };
+
     return {
       totalRevenueAtRiskINR: Math.round(totalRevenueAtRisk),
       totalRevenueRecoveredINR: Math.round(totalRevenueRecovered),
@@ -920,6 +1025,7 @@ export class FirestoreDatabase {
       rootCauseMetrics,
       checkoutMetrics,
       receivablesMetrics,
+      voiceMetrics,
 
       batchTimestamp: new Date().toISOString(),
       settledCasesCount: recoveredCount
@@ -1538,6 +1644,264 @@ export class FirestoreDatabase {
     this.casesCache.set(c6.caseId, c6);
     this.casesCache.set(c7.caseId, c7);
 
+    // ================================================================
+    // VOICE RECOVERY AGENT SEED CASES
+    // ================================================================
+
+    const vc1: RecoveryCase = {
+      caseId: 'REC-VO-901',
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'PAYMENT_FAILED',
+      status: 'RECOVERED',
+      amount: 4999.00,
+      currency: 'INR',
+      riskTier: 'MEDIUM',
+      customer: {
+        id: 'cust_vo_901',
+        name: 'Priya Sharma',
+        phone: '+91 98765 43210',
+        email: 'priya.sharma@gmail.com',
+        clvTier: 'GOLD',
+        historicalRecoveries: 1,
+        totalLifetimeSpendINR: 85000
+      },
+      sourceEvent: {
+        paymentId: 'pay_vo_901_failed',
+        amount: 4999.00,
+        currency: 'INR',
+        method: 'UPI',
+        errorCode: 'UPI_INSUFFICIENT_FUNDS',
+        errorDescription: 'Customer UPI transaction failed due to insufficient funds. Voice agent initiated Hinglish recovery call.',
+        occurredAt: new Date(Date.now() - 43200000).toISOString(),
+        bankCode: 'SBI'
+      },
+      voiceProfile: {
+        agentId: 'voice-agent-001',
+        caseId: 'REC-VO-901',
+        phoneNumber: '+91 98765 43210',
+        callerName: 'Priya Sharma',
+        languageVariant: 'HINGLISH',
+        toneVariant: 'FRIENDLY',
+        scriptSegments: [
+          {
+            segment: 'GREETING',
+            textEN: 'Hello Priya, this is a call from your payment platform regarding your recent transaction.',
+            textHinglish: 'Namaste Priya ji, main aapki payment platform se bol raha hoon. Aapka recent transaction ka related call hai.',
+            textHindi: 'नमस्ते प्रिया जी, मैं आपकी पेमेंट प्लेटफॉर्म से बोल रहा हूँ।'
+          },
+          {
+            segment: 'ISSUE_EXPLANATION',
+            textEN: 'Your payment of ₹4,999 could not be processed due to insufficient balance in your account.',
+            textHinglish: 'Aapka ₹4,999 ka payment process nahi ho paya kyunki aapke account mein balance kami hai.',
+            textHindi: 'आपका ₹4,999 का पेमेंट प्रोसेस नहीं हो पाया क्योंकि अकाउंट में बैलेंस कम है।'
+          },
+          {
+            segment: 'RECOVERY_OFFER',
+            textEN: 'We can retry the payment now, or you can use a different payment method. Would you like to try again?',
+            textHinglish: 'Hum abhi payment retry kar sakte hain, ya aap doosra payment method use kar sakte hain. Kya aap phir se try karna chahenge?',
+            textHindi: 'हम अभी पेमेंट रीट्राई कर सकते हैं, या आप दूसरा पेमेंट मेथड इस्तेमाल कर सकते हैं।'
+          },
+          {
+            segment: 'PAYMENT_CTA',
+            textEN: 'I can send you a payment link right now. Just confirm and I will share it on WhatsApp.',
+            textHinglish: 'Main aapko abhi payment link bhej sakta hoon. Bas confirm kijiye, main WhatsApp pe share kar dunga.',
+            textHindi: 'मैं आपको अभी पेमेंट लिंक भेज सकता हूँ। बस कन्फर्म कीजिए।'
+          }
+        ],
+        retryCount: 1,
+        maxRetries: 3,
+        callStartedAt: new Date(Date.now() - 42000000).toISOString(),
+        callEndedAt: new Date(Date.now() - 41700000).toISOString(),
+        callDurationSeconds: 185,
+        outcome: 'PROMISE_TO_PAY',
+        outcomeReason: 'Customer confirmed will retry payment within 2 hours after salary credit.',
+        promisedPaymentDate: new Date(Date.now() - 36000000).toISOString(),
+        promisedAmountINR: 4999,
+        dnis: '1800123456',
+        ani: '+91 98765 43210',
+        campaignId: 'CAMP-VO-2026-001'
+      },
+      diagnosis: {
+        rootCauseCategory: 'INSUFFICIENT_FUNDS',
+        rootCauseDetail: 'Customer UPI transaction failed due to insufficient funds. Voice agent Hinglish call resulted in promise-to-pay within 2 hours.',
+        confidenceScore: 0.92,
+        isTransient: true,
+        bankCode: 'SBI',
+        bankSwitchHealthIndex: 97.2,
+        recommendedRailSwitch: 'UPI',
+        diagnosedAt: new Date(Date.now() - 41500000).toISOString()
+      },
+      strategy: {
+        recommendedAction: 'VOICE_CALL',
+        targetChannel: 'VOICE',
+        offeredDiscountPct: 0,
+        calculatedIncentiveINR: 0,
+        delayMinutes: 0,
+        reasoning: 'Gold CLV customer with transient insufficient funds. Voice call in Hinglish with empathetic tone to recover ₹4,999. No discount needed — salary credit expected same day.',
+        expectedRecoveryProbability: 0.85,
+        scheduledExecutionAt: new Date(Date.now() - 41000000).toISOString()
+      },
+      compliance: {
+        approved: true,
+        rulesPassed: ['TRAI_QUIET_HOURS_OK', 'VOICE_CALL_CONSENT_OBTAINED', 'DO_NOT_DISTURB_CLEAR'],
+        violations: [],
+        requiresHumanApproval: false,
+        evaluatedAt: new Date(Date.now() - 40500000).toISOString()
+      },
+      outcome: {
+        isRecovered: true,
+        recoveredAmount: 4999.00,
+        settledPaymentId: 'pay_vo_901_settled',
+        reconciliationMethod: 'VOICE_PROMISE_UPI_RETRY',
+        recoveredAt: new Date(Date.now() - 34200000).toISOString(),
+        timeToRecoverSeconds: 7800,
+        attributedChannel: 'VOICE_HINGLISH',
+        costOfIncentiveINR: 0,
+        estimatedMdrFeeINR: 14.99,
+        mdrRatePct: 0.3,
+        businessInsights: 'Recovered ₹4,999 via Hinglish voice call. Customer promised to retry after salary credit. First-attempt call success — no retries needed.'
+      },
+      createdAt: new Date(Date.now() - 43200000).toISOString(),
+      updatedAt: new Date(Date.now() - 34200000).toISOString()
+    };
+
+    const vc2: RecoveryCase = {
+      caseId: 'REC-VO-902',
+      merchantId: 'mer_razorpay_demo',
+      eventType: 'CHECKOUT_ABANDONED',
+      status: 'RECOVERED',
+      amount: 14999.00,
+      currency: 'INR',
+      riskTier: 'HIGH',
+      customer: {
+        id: 'cust_vo_902',
+        name: 'Rahul Verma',
+        phone: '+91 87654 32109',
+        email: 'rahul.verma@outlook.com',
+        clvTier: 'PLATINUM',
+        historicalRecoveries: 3,
+        totalLifetimeSpendINR: 210000
+      },
+      sourceEvent: {
+        amount: 14999.00,
+        currency: 'INR',
+        method: 'UPI',
+        errorCode: 'CHECKOUT_ABANDONED',
+        errorDescription: 'High-value checkout abandoned at payment page. Customer left after selecting UPI but before completing payment. Voice agent initiated English recovery call.',
+        occurredAt: new Date(Date.now() - 7200000).toISOString(),
+        bankCode: 'HDFC'
+      },
+      checkoutProfile: {
+        checkoutId: 'chk_vo_902',
+        sessionId: 'sess_vo_902',
+        abandonedAt: new Date(Date.now() - 7200000).toISOString(),
+        lastActivityAt: new Date(Date.now() - 7200000).toISOString(),
+        stageReached: 'PAYMENT_SELECTION',
+        cartValueINR: 14999,
+        cartItems: [
+          { name: 'Premium Headphones', quantity: 1, priceINR: 9999 },
+          { name: 'Phone Case', quantity: 1, priceINR: 5000 }
+        ],
+        totalCartItems: 2,
+        deviceType: 'desktop',
+        browserSessionDurationSec: 420,
+        previousVisitCount: 3,
+        recoveryProbability: 0.88
+      },
+      voiceProfile: {
+        agentId: 'voice-agent-002',
+        caseId: 'REC-VO-902',
+        phoneNumber: '+91 87654 32109',
+        callerName: 'Rahul Verma',
+        languageVariant: 'ENGLISH',
+        toneVariant: 'PROFESSIONAL',
+        scriptSegments: [
+          {
+            segment: 'GREETING',
+            textEN: 'Good afternoon Rahul, this is a quick call from your shopping platform. Do you have a moment?',
+            textHinglish: 'Good afternoon Rahul ji, main aapke shopping platform se call kar raha hoon. Kya aapke paas ek minute hai?',
+            textHindi: 'नमस्ते राहुल जी, मैं आपके शॉपिंग प्लेटफॉर्म से बोल रहा हूँ।'
+          },
+          {
+            segment: 'ISSUE_EXPLANATION',
+            textEN: 'I noticed you were looking at some items worth ₹14,999 but the payment did not go through. Was there any issue?',
+            textHinglish: 'Maine dekha ki aap ₹14,999 ka kuch items dekh rahe the lekin payment complete nahi hua. Koi issue tha kya?',
+            textHindi: 'मैंने देखा कि आप ₹14,999 का कुछ आइटम्स देख रहे थे लेकिन पेमेंट कंप्लीट नहीं हुआ।'
+          },
+          {
+            segment: 'RECOVERY_OFFER',
+            textEN: 'I can help you complete the purchase right now. We also have a 5% instant discount available if you complete within the next 30 minutes.',
+            textHinglish: 'Main aapki purchase complete karne mein help kar sakta hoon. Aur agar aap 30 minute mein complete karte hain toh 5% instant discount bhi hai.',
+            textHindi: 'मैं आपकी परचेज़ कंप्लीट करने में हेल्प कर सकता हूँ। 30 मिनट में कंप्लीट करने पर 5% इंस्टैंट डिस्काउंट भी है।'
+          },
+          {
+            segment: 'PAYMENT_CTA',
+            textEN: 'Shall I send you a secure payment link? You can pay via any UPI app or card.',
+            textHinglish: 'Kya main aapko ek secure payment link bhej doon? Aap koi bhi UPI app ya card se pay kar sakte hain.',
+            textHindi: 'क्या मैं आपको एक सिक्योर पेमेंट लिंक भेज दूँ? आप कोई भी UPI ऐप या कार्ड से पे कर सकते हैं।'
+          }
+        ],
+        retryCount: 1,
+        maxRetries: 2,
+        callStartedAt: new Date(Date.now() - 6900000).toISOString(),
+        callEndedAt: new Date(Date.now() - 6600000).toISOString(),
+        callDurationSeconds: 240,
+        outcome: 'PROMISE_TO_PAY',
+        outcomeReason: 'Customer completed payment via UPI link shared during call. 5% discount applied.',
+        promisedPaymentDate: new Date(Date.now() - 6000000).toISOString(),
+        promisedAmountINR: 14249.05,
+        dnis: '1800123456',
+        ani: '+91 87654 32109',
+        campaignId: 'CAMP-VO-2026-002'
+      },
+      diagnosis: {
+        rootCauseCategory: 'STICKY_CHECKOUT',
+        rootCauseDetail: 'High-value cart abandoned at payment page on desktop. Customer hesitated at UPI confirmation. Voice call in English with professional tone recovered via instant payment link.',
+        confidenceScore: 0.88,
+        isTransient: true,
+        bankCode: 'HDFC',
+        bankSwitchHealthIndex: 94.8,
+        recommendedRailSwitch: 'UPI',
+        diagnosedAt: new Date(Date.now() - 6500000).toISOString()
+      },
+      strategy: {
+        recommendedAction: 'VOICE_CALL',
+        targetChannel: 'VOICE',
+        offeredDiscountPct: 5,
+        calculatedIncentiveINR: 749.95,
+        delayMinutes: 0,
+        reasoning: 'Platinum CLV customer with high cart value (₹14,999). Desktop checkout abandonment at payment page. English professional voice call with 5% instant discount to incentivize immediate completion.',
+        expectedRecoveryProbability: 0.88,
+        scheduledExecutionAt: new Date(Date.now() - 6200000).toISOString()
+      },
+      compliance: {
+        approved: true,
+        rulesPassed: ['TRAI_QUIET_HOURS_OK', 'VOICE_CALL_CONSENT_OBTAINED', 'DISCOUNT_WITHIN_THRESHOLD'],
+        violations: [],
+        requiresHumanApproval: false,
+        evaluatedAt: new Date(Date.now() - 6100000).toISOString()
+      },
+      outcome: {
+        isRecovered: true,
+        recoveredAmount: 14249.05,
+        settledPaymentId: 'pay_vo_902_settled',
+        paymentLinkId: 'plink_vo_902',
+        reconciliationMethod: 'VOICE_LINK_PAID_WEBHOOK',
+        recoveredAt: new Date(Date.now() - 5400000).toISOString(),
+        timeToRecoverSeconds: 1800,
+        attributedChannel: 'VOICE_ENGLISH',
+        costOfIncentiveINR: 749.95,
+        estimatedMdrFeeINR: 42.75,
+        mdrRatePct: 0.3,
+        businessInsights: 'Recovered ₹14,249 via English voice call with 5% discount. Customer completed payment within 30 minutes of call. High-value checkout recovery successful.'
+      },
+      createdAt: new Date(Date.now() - 7200000).toISOString(),
+      updatedAt: new Date(Date.now() - 5400000).toISOString()
+    };
+
+    this.casesCache.set(vc1.caseId, vc1);
+    this.casesCache.set(vc2.caseId, vc2);
+
     // 3. Initial Audits
     const initialAudits: Omit<AuditLogEntry, 'id' | 'signatureHash' | 'timestamp'>[] = [
       {
@@ -1620,6 +1984,42 @@ export class FirestoreDatabase {
         model: 'deterministic-receivables-detector',
         latencyMs: 5,
         tokensUsed: 0
+      },
+      {
+        caseId: 'REC-VO-901',
+        agentName: 'Voice Recovery Agent',
+        action: 'VOICE_CALL_INITIATED',
+        rationale: 'Hinglish voice call initiated to Priya Sharma (+91 98765 43210) for failed UPI payment of ₹4,999. Language: HINGLISH. Tone: FRIENDLY. Script: 4 segments generated.',
+        model: 'voice-agent-gemini',
+        latencyMs: 180,
+        tokensUsed: 320
+      },
+      {
+        caseId: 'REC-VO-901',
+        agentName: 'Voice Recovery Agent',
+        action: 'PROMISE_TO_PAY_CAPTURED',
+        rationale: 'Customer promised to retry payment within 2 hours after salary credit. Promise amount: ₹4,999. Follow-up scheduled.',
+        model: 'voice-agent-gemini',
+        latencyMs: 45,
+        tokensUsed: 120
+      },
+      {
+        caseId: 'REC-VO-902',
+        agentName: 'Voice Recovery Agent',
+        action: 'VOICE_CALL_INITIATED',
+        rationale: 'English voice call initiated to Rahul Verma (+91 87654 32109) for abandoned checkout of ₹14,999. Language: ENGLISH. Tone: PROFESSIONAL. 5% discount offered.',
+        model: 'voice-agent-gemini',
+        latencyMs: 195,
+        tokensUsed: 350
+      },
+      {
+        caseId: 'REC-VO-902',
+        agentName: 'Voice Recovery Agent',
+        action: 'PAYMENT_RECOVERED_VIA_VOICE',
+        rationale: 'Customer completed ₹14,249 payment via UPI link shared during English voice call. 5% discount applied. Recovery time: 30 minutes.',
+        model: 'voice-agent-gemini',
+        latencyMs: 50,
+        tokensUsed: 140
       }
     ];
 
