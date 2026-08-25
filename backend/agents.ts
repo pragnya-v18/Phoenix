@@ -111,10 +111,57 @@ function sanitizeForPrompt(value: string | undefined | null, maxLength: number =
 // Per-case pipeline lock to prevent duplicate concurrent executions
 const pipelineLocks = new Map<string, Promise<{ updatedCase: RecoveryCase; traces: AgentExecutionTrace[] }>>();
 
+// Per-case mutex for critical sections (human-action vs pipeline coordination).
+// The pipeline checks this before starting. The human-action holds it for its
+// entire read→modify→persist cycle. This prevents a new pipeline from starting
+// between waitForPipeline() returning and the case update completing.
+const caseLocks = new Map<string, Promise<void>>();
+
+/**
+ * Acquire a per-case mutex. Returns a release function.
+ * The caller MUST call release() in a finally block.
+ */
+export async function acquireCaseLock(caseId: string): Promise<() => void> {
+  // Wait for any existing lock on this case
+  const existing = caseLocks.get(caseId);
+  if (existing) {
+    try { await existing; } catch { /* lock holder threw — still safe to proceed */ }
+  }
+  // Install our lock (resolves when we call release)
+  let releaseFn: () => void;
+  const lockPromise = new Promise<void>((resolve) => { releaseFn = resolve; });
+  caseLocks.set(caseId, lockPromise);
+  return () => { caseLocks.delete(caseId); releaseFn!(); };
+}
+
+// Terminal statuses — pipeline must not reprocess cases in these states
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['RECOVERED', 'DISMISSED']);
+
+function isTerminalStatus(status: string): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
+
+/**
+ * Wait for any in-flight pipeline on a case to finish before modifying it.
+ * Returns the pipeline result if one was running, or undefined if idle.
+ * Used by human-action routes to coordinate with the pipeline.
+ */
+export async function waitForPipeline(caseId: string): Promise<{ updatedCase: RecoveryCase; traces: AgentExecutionTrace[] } | undefined> {
+  const existing = pipelineLocks.get(caseId);
+  if (existing) {
+    try {
+      return await existing;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 // Safe DB persistence wrappers — never throw, always log
 async function safePersistCase(recoveryCase: RecoveryCase): Promise<boolean> {
   try {
-    await safePersistCase(recoveryCase);
+    await db.upsertCase(recoveryCase);
     return true;
   } catch (err) {
     console.error(`[AgentSupervisor] Failed to persist case ${recoveryCase.caseId}:`, err);
@@ -145,7 +192,10 @@ export class AgentSupervisor {
   /**
    * Run the full 6-agent state graph on a newly detected or existing case.
    */
-  public static async executeRecoveryPipeline(recoveryCase: RecoveryCase): Promise<{
+  public static async executeRecoveryPipeline(
+    recoveryCase: RecoveryCase,
+    fallbackChannel?: ChannelType
+  ): Promise<{
     updatedCase: RecoveryCase;
     traces: AgentExecutionTrace[];
   }> {
@@ -156,7 +206,16 @@ export class AgentSupervisor {
       return await existingLock;
     }
 
-    const pipelinePromise = this._runRecoveryPipeline(recoveryCase);
+    // Case mutex: wait if a human-action (or other critical section) holds the lock.
+    // This prevents a new pipeline from starting between waitForPipeline() returning
+    // and the human-action route completing its case update.
+    const caseMutex = caseLocks.get(recoveryCase.caseId);
+    if (caseMutex) {
+      console.warn(`[AgentSupervisor] Case ${recoveryCase.caseId} locked by critical section — waiting...`);
+      try { await caseMutex; } catch { /* lock holder threw */ }
+    }
+
+    const pipelinePromise = this._runRecoveryPipeline(recoveryCase, fallbackChannel);
     pipelineLocks.set(recoveryCase.caseId, pipelinePromise);
     try {
       return await pipelinePromise;
@@ -165,13 +224,44 @@ export class AgentSupervisor {
     }
   }
 
-  private static async _runRecoveryPipeline(recoveryCase: RecoveryCase): Promise<{
+  private static async _runRecoveryPipeline(
+    recoveryCase: RecoveryCase,
+    fallbackChannel?: ChannelType
+  ): Promise<{
     updatedCase: RecoveryCase;
     traces: AgentExecutionTrace[];
   }> {
     const traces: AgentExecutionTrace[] = [];
     const startTime = Date.now();
     const customerIdentifier = recoveryCase.customer.phone || recoveryCase.customer.id;
+
+    // =============================================================
+    // TERMINAL STATUS GUARD: Never reprocess RECOVERED or DISMISSED cases
+    // =============================================================
+    if (isTerminalStatus(recoveryCase.status)) {
+      traces.push({
+        nodeName: 'terminal_guard',
+        agentTitle: 'Terminal Status Guard',
+        status: 'SKIPPED',
+        reasoning: `Case ${recoveryCase.caseId} is in terminal status '${recoveryCase.status}'. Pipeline skipped — no reprocessing allowed.`,
+        latencyMs: 1,
+        tokensUsed: 0,
+        outputSummary: { finalStatus: recoveryCase.status },
+        timestamp: new Date().toISOString()
+      });
+
+      await safeAuditLog({
+        caseId: recoveryCase.caseId,
+        agentName: 'Terminal Status Guard',
+        action: 'PIPELINE_SKIP_TERMINAL_STATUS',
+        rationale: `Pipeline blocked: case is in terminal status '${recoveryCase.status}'. No further processing.`,
+        model: 'deterministic-guard',
+        latencyMs: 1,
+        tokensUsed: 0
+      });
+
+      return { updatedCase: recoveryCase, traces };
+    }
 
     // =============================================================
     // GLOBAL OUTAGE GUARD: Intercept & Auto-Pause on Downed Switches
@@ -267,6 +357,24 @@ export class AgentSupervisor {
     // =============================================================
     const t0 = Date.now();
     const detectionResult = await this.runDetectionAgent(recoveryCase);
+
+    // Intermediate guard: check if case moved to terminal status during detection (Gemini call)
+    const postDetectionCase = db.getCase(recoveryCase.caseId);
+    if (postDetectionCase && isTerminalStatus(postDetectionCase.status)) {
+      recoveryCase.status = postDetectionCase.status;
+      traces.push({
+        nodeName: 'terminal_guard_post_detection',
+        agentTitle: 'Terminal Status Guard',
+        status: 'SKIPPED',
+        reasoning: `Case transitioned to '${postDetectionCase.status}' during detection. Pipeline halted.`,
+        latencyMs: Date.now() - t0,
+        tokensUsed: 0,
+        outputSummary: { finalStatus: postDetectionCase.status },
+        timestamp: new Date().toISOString()
+      });
+      return { updatedCase: recoveryCase, traces };
+    }
+
     recoveryCase.riskTier = detectionResult.riskTier;
     recoveryCase.status = 'DIAGNOSING';
     await safePersistCase(recoveryCase);
@@ -333,6 +441,12 @@ export class AgentSupervisor {
     const t2 = Date.now();
     const strategy = await this.runStrategyAgent(recoveryCase, diagnosis);
     recoveryCase.strategy = strategy;
+
+    // Override channel if fallback was specified (e.g., payment_link.expired retry)
+    if (fallbackChannel) {
+      strategy.targetChannel = fallbackChannel;
+    }
+
     await safePersistCase(recoveryCase);
 
     traces.push({
@@ -406,6 +520,24 @@ export class AgentSupervisor {
     // NODE 5: RECOVERY AGENT (Gemini Communication & Real Razorpay Payment Link)
     // =============================================================
     const t4 = Date.now();
+
+    // Intermediate guard: check terminal status before dispatching payment link
+    const preExecCase = db.getCase(recoveryCase.caseId);
+    if (preExecCase && isTerminalStatus(preExecCase.status)) {
+      recoveryCase.status = preExecCase.status;
+      traces.push({
+        nodeName: 'terminal_guard_pre_execution',
+        agentTitle: 'Terminal Status Guard',
+        status: 'SKIPPED',
+        reasoning: `Case transitioned to '${preExecCase.status}' before execution dispatch. Pipeline halted — payment link not generated.`,
+        latencyMs: Date.now() - startTime,
+        tokensUsed: 0,
+        outputSummary: { finalStatus: preExecCase.status },
+        timestamp: new Date().toISOString()
+      });
+      return { updatedCase: recoveryCase, traces };
+    }
+
     recoveryCase.status = 'EXECUTING';
     await safePersistCase(recoveryCase);
 
@@ -1164,6 +1296,24 @@ Return ONLY JSON:
     // =============================================================
     const t0 = Date.now();
     const detectionResult = this.runCheckoutDetectionAgent(recoveryCase);
+
+    // Intermediate guard: check terminal status after detection
+    const postCheckoutDetection = db.getCase(recoveryCase.caseId);
+    if (postCheckoutDetection && isTerminalStatus(postCheckoutDetection.status)) {
+      recoveryCase.status = postCheckoutDetection.status;
+      traces.push({
+        nodeName: 'terminal_guard_checkout_detection',
+        agentTitle: 'Terminal Status Guard',
+        status: 'SKIPPED',
+        reasoning: `Case transitioned to '${postCheckoutDetection.status}' during checkout detection. Pipeline halted.`,
+        latencyMs: Date.now() - t0,
+        tokensUsed: 0,
+        outputSummary: { finalStatus: postCheckoutDetection.status },
+        timestamp: new Date().toISOString()
+      });
+      return { updatedCase: recoveryCase, traces };
+    }
+
     recoveryCase.riskTier = detectionResult.riskTier;
     recoveryCase.status = 'DIAGNOSING';
     await safePersistCase(recoveryCase);
@@ -1747,6 +1897,24 @@ Return ONLY JSON:
     // =============================================================
     const t0 = Date.now();
     const detectionResult = this.runReceivablesDetectionAgent(recoveryCase);
+
+    // Intermediate guard: check terminal status after detection
+    const postReceivablesDetection = db.getCase(recoveryCase.caseId);
+    if (postReceivablesDetection && isTerminalStatus(postReceivablesDetection.status)) {
+      recoveryCase.status = postReceivablesDetection.status;
+      traces.push({
+        nodeName: 'terminal_guard_receivables_detection',
+        agentTitle: 'Terminal Status Guard',
+        status: 'SKIPPED',
+        reasoning: `Case transitioned to '${postReceivablesDetection.status}' during receivables detection. Pipeline halted.`,
+        latencyMs: Date.now() - t0,
+        tokensUsed: 0,
+        outputSummary: { finalStatus: postReceivablesDetection.status },
+        timestamp: new Date().toISOString()
+      });
+      return { updatedCase: recoveryCase, traces };
+    }
+
     recoveryCase.riskTier = detectionResult.riskTier;
     recoveryCase.status = 'DIAGNOSING';
     await safePersistCase(recoveryCase);
@@ -2586,16 +2754,11 @@ Return ONLY JSON:
       tokensUsed: scriptSegments.length * 80
     });
 
-    // If promise-to-pay, dispatch to existing pipeline for reconciliation
-    if (outcome === 'PROMISE_TO_PAY') {
-      setTimeout(async () => {
-        try {
-          await AgentSupervisor.executeRecoveryPipeline(baseCase);
-        } catch (err) {
-          console.error('[VoiceAgent] Pipeline dispatch error:', caseId, err);
-        }
-      }, 200);
-    }
+    // For PROMISE_TO_PAY: case is already set to RECOVERED with full outcome.
+    // No pipeline dispatch needed — the voice agent owns the complete recovery.
+    // For other outcomes (NO_ANSWER, CALLBACK_REQUESTED, etc.): case stays in
+    // DIAGNOSING/FOLLOWING_UP status. The next webhook or scheduled retry will
+    // pick it up through the normal pipeline path.
 
     return baseCase;
   }

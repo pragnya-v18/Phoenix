@@ -1,6 +1,10 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { apiRouter } from './backend/routes.js';
+import { pipelineJobQueue } from './backend/job-queue.js';
+import { AgentSupervisor } from './backend/agents.js';
+import { db } from './backend/db.js';
+import { PipelineJob } from './backend/job-queue.js';
 
 async function startServer() {
   const app = express();
@@ -39,17 +43,40 @@ async function startServer() {
     res.status(500).json({ error: 'Internal server error', details: err?.message || String(err) });
   });
 
+  // Bug 3 fix: initialize job queue BEFORE app.listen() so no jobs are
+  // dropped in the window between accepting connections and starting the processor.
+  pipelineJobQueue.init(async (job: PipelineJob) => {
+    const latestCase = db.getCase(job.caseId);
+    if (!latestCase) {
+      console.warn(`[JobQueue] Case ${job.caseId} not found — skipping job ${job.id}.`);
+      return;
+    }
+    if (latestCase.status === 'RECOVERED' || latestCase.status === 'DISMISSED') {
+      return;
+    }
+    await AgentSupervisor.executeRecoveryPipeline(latestCase, job.fallbackChannel);
+  });
+
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[RecoverFlow AI] Server running on http://0.0.0.0:${PORT}`);
   });
 
   // Graceful shutdown
-  const shutdown = (signal: string) => {
+  const shutdown = async (signal: string) => {
     console.log(`[Server] ${signal} received — shutting down gracefully...`);
-    server.close(() => {
-      console.log('[Server] HTTP server closed. Exiting.');
+
+    // Stop accepting new connections, drain job queue
+    server.close(async () => {
+      console.log('[Server] HTTP server closed.');
+      try {
+        await pipelineJobQueue.shutdown();
+        console.log('[Server] Job queue drained. Exiting.');
+      } catch (err) {
+        console.error('[Server] Error draining job queue:', err);
+      }
       process.exit(0);
     });
+
     // Force exit after 10s if connections hang
     setTimeout(() => {
       console.error('[Server] Forced exit after timeout.');

@@ -16,6 +16,7 @@ import { db } from './db.js';
 import { AgentSupervisor } from './agents.js';
 import { IdempotencyService } from './idempotency.js';
 import { FinancialAccountingEngine } from './financials.js';
+import { pipelineJobQueue } from './job-queue.js';
 import { RecoveryCase, PaymentMethod, ChannelType, CheckoutStage, CheckoutProfile, InvoiceDPD } from '../src/types.js';
 
 export interface RazorpayPaymentLinkResponse {
@@ -294,14 +295,8 @@ export class RazorpayService {
         tokensUsed: 0
       });
 
-      // Trigger multi-agent pipeline asynchronously
-      setTimeout(async () => {
-        try {
-          await AgentSupervisor.executeRecoveryPipeline(newCase);
-        } catch (err) {
-          console.error('[RazorpayService] Pipeline execution error on case:', newCase.caseId, err);
-        }
-      }, 400);
+      // Persistent job queue: survives restarts, no in-memory scheduling
+      pipelineJobQueue.enqueue(newCase);
 
       return {
         status: 'INGESTED',
@@ -372,6 +367,40 @@ export class RazorpayService {
           }
         };
       }
+
+      // TC-PF-01: No matching case found — persist to dead-letter
+      const deadLetterId = `dl_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      db.addDeadLetterPayment({
+        id: deadLetterId,
+        eventId,
+        event,
+        paymentId: payment?.id,
+        paymentOrderId: payment?.order_id,
+        paymentLinkId: paymentLink.id,
+        amountINR: (paymentLink.amount || 0) / 100,
+        currency: paymentLink.currency || 'INR',
+        customerName: paymentLink.customer?.name,
+        customerEmail: paymentLink.customer?.email,
+        customerPhone: paymentLink.customer?.contact,
+        matched: false,
+        createdAt: new Date().toISOString(),
+        rawPayload: eventPayload
+      });
+
+      await db.addAuditLog({
+        caseId: 'DEAD_LETTER',
+        agentName: 'Reconciliation Dead-Letter Agent',
+        action: 'PAYMENT_LINK_PAID_NO_CASE',
+        rationale: `payment_link.paid received for link ${paymentLink.id} but no matching recovery case found. Payment of ₹${(paymentLink.amount || 0) / 100} persisted to dead-letter queue for reconciliation. Reference: ${refCaseId || 'none'}.`,
+        model: 'dead-letter-agent',
+        latencyMs: 8,
+        tokensUsed: 0
+      });
+
+      return {
+        status: 'DEAD_LETTER',
+        actionTaken: `Payment received but no matching case found. Persisted to dead-letter queue (${deadLetterId}).`
+      };
     }
 
     // =========================================================================
@@ -424,6 +453,39 @@ export class RazorpayService {
           }
         };
       }
+
+      // TC-PF-01: No matching case found — persist to dead-letter
+      const deadLetterId = `dl_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      db.addDeadLetterPayment({
+        id: deadLetterId,
+        eventId,
+        event,
+        paymentId: payment.id,
+        paymentOrderId: payment.order_id,
+        amountINR: (payment.amount || 0) / 100,
+        currency: payment.currency || 'INR',
+        customerName: payment.notes?.customer_name,
+        customerEmail: payment.email,
+        customerPhone: payment.contact,
+        matched: false,
+        createdAt: new Date().toISOString(),
+        rawPayload: eventPayload
+      });
+
+      await db.addAuditLog({
+        caseId: 'DEAD_LETTER',
+        agentName: 'Reconciliation Dead-Letter Agent',
+        action: 'PAYMENT_CAPTURED_NO_CASE',
+        rationale: `payment.captured received for payment ${payment.id} but no matching recovery case found. Amount: ₹${(payment.amount || 0) / 100}. Persisted to dead-letter queue.`,
+        model: 'dead-letter-agent',
+        latencyMs: 8,
+        tokensUsed: 0
+      });
+
+      return {
+        status: 'DEAD_LETTER',
+        actionTaken: `Payment captured but no matching case found. Persisted to dead-letter queue (${deadLetterId}).`
+      };
     }
 
     // =========================================================================
@@ -463,13 +525,7 @@ export class RazorpayService {
       };
 
       await db.upsertCase(subCase);
-      setTimeout(async () => {
-        try {
-          await AgentSupervisor.executeRecoveryPipeline(subCase);
-        } catch (err) {
-          console.error('[RazorpayService] Subscription pipeline error:', subCase.caseId, err);
-        }
-      }, 400);
+      pipelineJobQueue.enqueue(subCase);
 
       return {
         status: 'INGESTED',
@@ -479,29 +535,146 @@ export class RazorpayService {
     }
 
     // =========================================================================
-    // EVENT 5: PAYMENT_LINK.CANCELLED / EXPIRED
+    // EVENT 5: PAYMENT_LINK.CANCELLED / EXPIRED (TC-PF-05: Zombie Case Fix)
     // =========================================================================
     if (event === 'payment_link.cancelled' || event === 'payment_link.expired') {
       const refCaseId = paymentLink?.notes?.caseId || paymentLink?.reference_id?.split('_')[1];
       if (refCaseId) {
         const c = db.getCase(refCaseId);
-        if (c && c.status !== 'RECOVERED') {
-          await db.addAuditLog({
-            caseId: c.caseId,
-            agentName: 'Razorpay Ingress Sentinel',
-            action: 'PAYMENT_LINK_EXPIRED_NOTIFICATION',
-            rationale: `Payment link ${paymentLink?.id} expired or cancelled. Scheduling fallback channel engagement.`,
-            model: 'webhook-notifier',
-            latencyMs: 5,
-            tokensUsed: 0
-          });
+        if (c && c.status !== 'RECOVERED' && c.status !== 'DISMISSED') {
+          const maxRetries = 3;
+          const currentRetry = c.retryState?.retryCount || 0;
+
+          if (currentRetry >= maxRetries) {
+            // Max retries exhausted — escalate or dismiss
+            c.status = 'DISMISSED';
+            c.retryState = {
+              retryCount: currentRetry,
+              maxRetries,
+              lastRetryAt: c.retryState?.lastRetryAt,
+              lastRetryChannel: c.retryState?.lastRetryChannel,
+              dismissedAt: new Date().toISOString()
+            };
+            c.updatedAt = new Date().toISOString();
+            await db.upsertCase(c);
+
+            await db.addAuditLog({
+              caseId: c.caseId,
+              agentName: 'Payment Link Retry Coordinator',
+              action: 'PAYMENT_LINK_RETRY_EXHAUSTED',
+              rationale: `Payment link ${paymentLink?.id} expired. Retry ${currentRetry}/${maxRetries} exhausted. Case dismissed — no further automated recovery attempts.`,
+              model: 'retry-coordinator',
+              latencyMs: 5,
+              tokensUsed: 0
+            });
+          } else {
+            // Increment retry counter
+            const nextRetry = currentRetry + 1;
+            const fallbackChannels: ChannelType[] = ['SMS', 'EMAIL', 'WHATSAPP'];
+            const fallbackChannel = fallbackChannels[currentRetry] || 'EMAIL';
+
+            c.retryState = {
+              retryCount: nextRetry,
+              maxRetries,
+              lastRetryAt: new Date().toISOString(),
+              lastRetryChannel: fallbackChannel
+            };
+            c.updatedAt = new Date().toISOString();
+            await db.upsertCase(c);
+
+            await db.addAuditLog({
+              caseId: c.caseId,
+              agentName: 'Payment Link Retry Coordinator',
+              action: 'PAYMENT_LINK_EXPIRED_RETRY_SCHEDULED',
+              rationale: `Payment link ${paymentLink?.id} expired. Scheduling fallback engagement via ${fallbackChannel} (retry ${nextRetry}/${maxRetries}). Previous channel: ${c.retryState?.lastRetryChannel || 'PAYMENT_LINK'}.`,
+              model: 'retry-coordinator',
+              latencyMs: 5,
+              tokensUsed: 0
+            });
+
+            // Persistent job queue: fallback engagement survives restarts
+            pipelineJobQueue.enqueue(c, fallbackChannel);
+          }
         }
       }
 
       return {
         status: 'ACKNOWLEDGED',
-        actionTaken: `Recorded ${event} for payment link ${paymentLink?.id || 'unknown'}`
+        actionTaken: `Processed ${event} for payment link ${paymentLink?.id || 'unknown'}. Retry coordination active.`
       };
+    }
+
+    // =========================================================================
+    // EVENT 6: REFUND.CREATED / REFUND.PROCESSED (TC-PF-04)
+    // =========================================================================
+    if (event === 'refund.created' || event === 'refund.processed' || event === 'refund.failed') {
+      const refund = eventPayload.payload?.refund?.entity;
+      if (refund) {
+        const refundAmount = (refund.amount || 0) / 100;
+        const paymentId = refund.payment_id;
+
+        // Find the case that was originally recovered with this payment
+        const allCases = db.getAllCases();
+        const matchedCase = allCases.find(c =>
+          c.outcome?.settledPaymentId === paymentId ||
+          c.sourceEvent.paymentId === paymentId
+        );
+
+        if (matchedCase && matchedCase.status === 'RECOVERED') {
+          const originalRecovered = matchedCase.outcome?.recoveredAmount || matchedCase.amount;
+
+          matchedCase.refundState = {
+            isRefunded: event !== 'refund.failed',
+            refundAmountINR: event === 'refund.failed' ? 0 : refundAmount,
+            refundId: refund.id,
+            refundedAt: event === 'refund.failed' ? undefined : new Date().toISOString(),
+            originalRecoveredAmountINR: originalRecovered
+          };
+
+          if (event !== 'refund.failed' && refundAmount >= originalRecovered) {
+            // Full refund — revert case to active state for re-attempt
+            matchedCase.status = 'DETECTED';
+            matchedCase.outcome = undefined;
+          }
+
+          matchedCase.updatedAt = new Date().toISOString();
+          await db.upsertCase(matchedCase);
+
+          await db.addAuditLog({
+            caseId: matchedCase.caseId,
+            agentName: 'Refund Reconciliation Agent',
+            action: event === 'refund.failed' ? 'REFUND_FAILED' : 'REFUND_PROCESSED',
+            rationale: event === 'refund.failed'
+              ? `Refund ${refund.id} for payment ${paymentId} failed. Case remains RECOVERED. Refund amount: ₹${refundAmount}.`
+              : `Refund ${refund.id} processed for payment ${paymentId}. Amount: ₹${refundAmount}. Original recovered: ₹${originalRecovered}. ${refundAmount >= originalRecovered ? 'Case reverted to DETECTED for re-attempt.' : 'Case updated with partial refund.'}`,
+            model: 'refund-reconciliation',
+            latencyMs: 8,
+            tokensUsed: 0
+          });
+
+          return {
+            status: 'REFUND_RECONCILED',
+            caseId: matchedCase.caseId,
+            actionTaken: `Refund ${event} processed for case ${matchedCase.caseId}. Amount: ₹${refundAmount}`
+          };
+        }
+
+        // Refund received but no matching case — dead-letter
+        await db.addAuditLog({
+          caseId: 'UNMATCHED',
+          agentName: 'Refund Reconciliation Agent',
+          action: 'REFUND_NO_CASE_FOUND',
+          rationale: `Refund ${refund.id} for payment ${paymentId} could not be matched to any recovery case. Amount: ₹${refundAmount}. Logged for manual review.`,
+          model: 'refund-reconciliation',
+          latencyMs: 5,
+          tokensUsed: 0
+        });
+
+        return {
+          status: 'REFUND_UNMATCHED',
+          actionTaken: `Refund ${event} could not be matched to any case. Logged for review.`
+        };
+      }
     }
 
     return {
@@ -746,14 +919,8 @@ export class RazorpayService {
       await db.upsertCase(newCase);
       createdCases.push(newCase);
 
-      // Trigger the multi-agent execution pipeline with slight stagger for natural UX
-      setTimeout(async () => {
-        try {
-          await AgentSupervisor.executeRecoveryPipeline(newCase);
-        } catch (err) {
-          console.error(`Error processing batch case ${newCase.caseId}:`, err);
-        }
-      }, (i + 1) * 350);
+      // Persistent job queue with staggered delay for natural UX
+      pipelineJobQueue.enqueue(newCase, undefined, (i + 1) * 350);
     }
 
     return {
@@ -910,14 +1077,8 @@ export class RazorpayService {
 
     await db.upsertCase(newCase);
     
-    // Asynchronously run agents
-    setTimeout(async () => {
-      try {
-        await AgentSupervisor.executeRecoveryPipeline(newCase);
-      } catch (err) {
-        console.error('[RazorpayService] Pipeline error on case:', newCase.caseId, err);
-      }
-    }, 400);
+    // Persistent job queue: survives restarts
+    pipelineJobQueue.enqueue(newCase);
 
     return newCase;
   }
@@ -1076,13 +1237,7 @@ export class RazorpayService {
       tokensUsed: 0
     });
 
-    setTimeout(async () => {
-      try {
-        await AgentSupervisor.executeRecoveryPipeline(newCase);
-      } catch (err) {
-        console.error('[RazorpayService] Checkout pipeline error:', newCase.caseId, err);
-      }
-    }, 400);
+    pipelineJobQueue.enqueue(newCase);
 
     return newCase;
   }
@@ -1311,13 +1466,7 @@ export class RazorpayService {
       tokensUsed: 0
     });
 
-    setTimeout(async () => {
-      try {
-        await AgentSupervisor.executeRecoveryPipeline(newCase);
-      } catch (err) {
-        console.error('[RazorpayService] Receivables pipeline error:', newCase.caseId, err);
-      }
-    }, 400);
+    pipelineJobQueue.enqueue(newCase);
 
     return newCase;
   }

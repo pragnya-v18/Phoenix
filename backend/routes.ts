@@ -5,9 +5,10 @@
 
 import { Router, Request, Response } from 'express';
 import { db } from './db.js';
-import { AgentSupervisor } from './agents.js';
+import { AgentSupervisor, waitForPipeline, acquireCaseLock } from './agents.js';
 import { RazorpayService } from './razorpay.js';
 import { FinancialAccountingEngine } from './financials.js';
+import { pipelineJobQueue } from './job-queue.js';
 import { RecoveryCase, CaseStatus } from '../src/types.js';
 
 export const apiRouter = Router();
@@ -401,6 +402,11 @@ apiRouter.get('/cases/:caseId', (req: Request, res: Response) => {
 
 // 6. Human-in-the-Loop (HITL) Manual Actions
 apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'], async (req: Request, res: Response) => {
+  // Acquire per-case mutex for the entire critical section.
+  // This prevents a new pipeline from starting between waitForPipeline() returning
+  // and our case update completing. The pipeline checks caseLocks before starting
+  // and will wait/defer if we hold it.
+  let releaseLock: (() => void) | undefined;
   try {
     const { caseId } = req.params;
     const { action, overrideDiscountPct, overrideChannel, operatorNotes, notes } = req.body;
@@ -410,26 +416,51 @@ apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'],
       return res.status(404).json({ error: `Case ${caseId} not found` });
     }
 
+    // Wait for any in-flight pipeline to finish, then hold the case mutex
+    await waitForPipeline(caseId);
+    releaseLock = await acquireCaseLock(caseId);
+
+    // Re-fetch after pipeline + lock — status may have changed
+    const currentCase = db.getCase(caseId);
+    if (!currentCase) {
+      return res.status(404).json({ error: `Case ${caseId} not found after pipeline wait` });
+    }
+
+    // Terminal status guard: reject actions on already-terminal cases
+    const terminalStatuses: CaseStatus[] = ['RECOVERED', 'DISMISSED'];
+    if (terminalStatuses.includes(currentCase.status as CaseStatus)) {
+      return res.status(409).json({
+        error: `Case ${caseId} is already in terminal status '${currentCase.status}'. No action taken.`
+      });
+    }
+
     if (action === 'APPROVE') {
-      const finalDiscount = typeof overrideDiscountPct === 'number' ? overrideDiscountPct : (targetCase.strategy?.offeredDiscountPct || 0);
-      const finalChannel = overrideChannel || targetCase.strategy?.targetChannel || 'WHATSAPP';
-      const netAmount = Math.round(targetCase.amount * (1 - finalDiscount / 100));
+      const finalDiscount = typeof overrideDiscountPct === 'number' ? overrideDiscountPct : (currentCase.strategy?.offeredDiscountPct || 0);
+      const finalChannel = overrideChannel || currentCase.strategy?.targetChannel || 'WHATSAPP';
+      const netAmount = Math.round(currentCase.amount * (1 - finalDiscount / 100));
 
-      targetCase.status = 'EXECUTING';
-      targetCase.humanActionNotes = operatorNotes || notes || 'Approved by human operator';
-      targetCase.updatedAt = new Date().toISOString();
+      currentCase.status = 'EXECUTING';
+      currentCase.humanActionNotes = operatorNotes || notes || 'Approved by human operator';
+      currentCase.updatedAt = new Date().toISOString();
 
-      await db.upsertCase(targetCase);
+      await db.upsertCase(currentCase);
 
       await db.addAuditLog({
         caseId,
         agentName: 'Human Operator Override',
         action: 'APPROVE_RECOVERY_EXECUTION',
-        rationale: `Manual approval granted. Discount: ${finalDiscount}%, Channel: ${finalChannel}. Notes: ${targetCase.humanActionNotes}`,
+        rationale: `Manual approval granted. Discount: ${finalDiscount}%, Channel: ${finalChannel}. Notes: ${currentCase.humanActionNotes}`,
         model: 'human-in-the-loop',
         latencyMs: 0,
         tokensUsed: 0
       });
+
+      // Release lock before the setTimeout — the critical section is complete.
+      // The setTimeout re-fetches from DB and checks status, which is safe because
+      // any concurrent pipeline will see EXECUTING and its intermediate guard will
+      // re-check DB before proceeding to RECOVERED.
+      releaseLock();
+      releaseLock = undefined;
 
       // Simulate instant recovery success after dispatch
       setTimeout(async () => {
@@ -444,7 +475,7 @@ apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'],
               recoveredAt: new Date().toISOString(),
               timeToRecoverSeconds: 45,
               attributedChannel: `${finalChannel}_HUMAN_APPROVED`,
-              costOfIncentiveINR: targetCase.amount - netAmount
+              costOfIncentiveINR: currentCase.amount - netAmount
             };
             await db.upsertCase(updated);
 
@@ -463,29 +494,32 @@ apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'],
         }
       }, 3000);
 
-      return res.json({ success: true, status: 'EXECUTING', case: targetCase });
+      return res.json({ success: true, status: 'EXECUTING', case: currentCase });
     } else if (action === 'DISMISS') {
-      targetCase.status = 'DISMISSED';
-      targetCase.humanActionNotes = operatorNotes || notes || 'Dismissed by operator';
-      await db.upsertCase(targetCase);
+      currentCase.status = 'DISMISSED';
+      currentCase.humanActionNotes = operatorNotes || notes || 'Dismissed by operator';
+      await db.upsertCase(currentCase);
 
       await db.addAuditLog({
         caseId,
         agentName: 'Human Operator Override',
         action: 'DISMISS_CASE',
-        rationale: `Case dismissed: ${targetCase.humanActionNotes}`,
+        rationale: `Case dismissed: ${currentCase.humanActionNotes}`,
         model: 'human-in-the-loop',
         latencyMs: 0,
         tokensUsed: 0
       });
 
-      return res.json({ success: true, status: 'DISMISSED', case: targetCase });
+      return res.json({ success: true, status: 'DISMISSED', case: currentCase });
     }
 
     res.status(400).json({ error: 'Invalid action. Must be APPROVE or DISMISS.' });
   } catch (err: any) {
     console.error('[Route] human-action error:', err);
     res.status(500).json({ error: 'Internal server error', details: err?.message || String(err) });
+  } finally {
+    // Always release the case mutex, even on error
+    releaseLock?.();
   }
 });
 
@@ -499,6 +533,14 @@ apiRouter.post(['/acp/negotiate', '/acp/negotiate/:caseId'], async (req: Request
     const targetCase = db.getCase(caseId);
     if (!targetCase) {
       return res.status(404).json({ error: `Case ${caseId} not found` });
+    }
+
+    // Terminal status guard: reject ACP actions on already-terminal cases
+    const terminalStatuses: CaseStatus[] = ['RECOVERED', 'DISMISSED'];
+    if (terminalStatuses.includes(targetCase.status as CaseStatus)) {
+      return res.status(409).json({
+        error: `Case ${caseId} is in terminal status '${targetCase.status}'. ACP negotiation not permitted.`
+      });
     }
 
     // 1. Log incoming Customer Agent Message
@@ -615,4 +657,39 @@ apiRouter.get(['/audits', '/audit-trail'], (req: Request, res: Response) => {
     return res.json(db.getAuditLogs(caseId as string));
   }
   res.json(db.getAllAuditLogs());
+});
+
+// 10. Dead-Letter Payment Reconciliation (TC-PF-01)
+apiRouter.get('/admin/dead-letter', (req: Request, res: Response) => {
+  const { unmatched } = req.query;
+  if (unmatched === 'true') {
+    return res.json(db.getUnmatchedDeadLetterPayments());
+  }
+  res.json(db.getDeadLetterPayments());
+});
+
+apiRouter.post('/admin/dead-letter/:paymentId/match', (req: Request, res: Response) => {
+  const { paymentId } = req.params;
+  const { caseId } = req.body;
+  if (!caseId) {
+    return res.status(400).json({ error: 'caseId is required' });
+  }
+  const matched = db.matchDeadLetterPayment(paymentId, caseId);
+  if (matched) {
+    res.json({ success: true, message: `Dead-letter payment ${paymentId} matched to case ${caseId}` });
+  } else {
+    res.status(404).json({ error: `Dead-letter payment ${paymentId} not found or already matched` });
+  }
+});
+
+// 11. Persistent Pipeline Job Queue (H3 fix — survives restarts)
+apiRouter.get('/admin/jobs', (req: Request, res: Response) => {
+  const jobs = pipelineJobQueue.getJobs();
+  res.json({
+    pending: jobs.filter(j => j.status === 'PENDING').length,
+    running: jobs.filter(j => j.status === 'RUNNING').length,
+    completed: jobs.filter(j => j.status === 'COMPLETED').length,
+    failed: jobs.filter(j => j.status === 'FAILED').length,
+    jobs
+  });
 });

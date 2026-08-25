@@ -432,6 +432,25 @@ export interface AuditLogEntry {
   timestamp: string;
 }
 
+export interface DeadLetterPayment {
+  id: string;
+  eventId: string;
+  event: string;
+  paymentId?: string;
+  paymentOrderId?: string;
+  paymentLinkId?: string;
+  amountINR: number;
+  currency: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  matched: boolean;
+  matchedCaseId?: string;
+  matchedAt?: string;
+  createdAt: string;
+  rawPayload: Record<string, any>;
+}
+
 export interface RecoveryCase {
   caseId: string;
   merchantId: string;
@@ -450,6 +469,21 @@ export interface RecoveryCase {
   checkoutProfile?: CheckoutProfile;
   invoiceProfile?: InvoiceProfile;
   voiceProfile?: VoiceAgentProfile;
+  retryState?: {
+    retryCount: number;
+    maxRetries: number;
+    lastRetryAt?: string;
+    lastRetryChannel?: ChannelType;
+    escalatedAt?: string;
+    dismissedAt?: string;
+  };
+  refundState?: {
+    isRefunded: boolean;
+    refundAmountINR: number;
+    refundId?: string;
+    refundedAt?: string;
+    originalRecoveredAmountINR: number;
+  };
   humanActionNotes?: string;
   operatorId?: string;
   cooldownStatus?: {
