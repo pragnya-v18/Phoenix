@@ -77,12 +77,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   const degradedBanks = bankHealth.filter(b => b.status !== 'HEALTHY');
 
   const tabTitles: Record<string, { title: string; subtitle: string }> = {
-    dashboard: { title: 'Executive Command Center', subtitle: 'Autonomous Revenue Recovery Engine & Live Financial Forensics' },
-    cases: { title: 'Recovery Triage & Case Ledger', subtitle: 'Real-time transaction failure interception, AI diagnosis, and human review' },
-    agents: { title: 'LangGraph Multi-Agent Mesh', subtitle: 'Autonomous 7-agent DAG execution pipeline with latency and reasoning traces' },
-    acp: { title: 'ACP 2.0 Agent-to-Agent Sandbox', subtitle: 'Autonomous inter-agent commerce negotiation protocol and wallet checkout' },
-    'bank-radar': { title: 'Indian Banking Switch Radar', subtitle: 'Real-time NPCI UPI and bank switch uptime matrix preventing blind retries' },
-    audits: { title: 'Immutable Compliance & Audit Trail', subtitle: 'Cryptographically signed agent decision logs and explainability trail' }
+    dashboard: { title: 'Mission Control', subtitle: 'Recovery lifecycle overview — failure detection to revenue capture' },
+    cases: { title: 'Case Intelligence', subtitle: 'Audit intercepted failures, inspect AI reasoning, manage human review' },
+    agents: { title: 'Agent Orchestration', subtitle: '7-agent LangGraph pipeline — execution topology and reasoning traces' },
+    acp: { title: 'Protocol Monitor', subtitle: 'Agent-to-agent commerce negotiation and settlement protocol' },
+    'bank-radar': { title: 'Switch Telemetry', subtitle: 'NPCI UPI and bank switch uptime matrix — outage detection and routing' },
+    audits: { title: 'Forensic Timeline', subtitle: 'Cryptographically signed agent decision trail with hash verification' }
   };
 
   const currentTabInfo = tabTitles[activeTab] || { title: 'Command Center', subtitle: 'Razorpay AI Revenue Recovery' };
@@ -162,13 +162,36 @@ export const TopBar: React.FC<TopBarProps> = ({
             </h1>
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              Live Pipeline
+              LIVE
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
             {currentTabInfo.subtitle}
           </p>
         </div>
+
+        {/* Center: Compact KPI Strip */}
+        {kpis && (
+          <div className="hidden lg:flex items-center gap-4 px-4 py-1.5 rounded-xl bg-slate-50/80 border border-slate-200/60">
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+              <span className="text-slate-500">Rate</span>
+              <span className="font-mono font-bold text-slate-900">{kpis.recoveryRatePercentage.toFixed(1)}%</span>
+            </div>
+            <div className="w-px h-3 bg-slate-200"></div>
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+              <span className="text-slate-500">Active</span>
+              <span className="font-mono font-bold text-slate-900">{kpis.activeCasesCount}</span>
+            </div>
+            <div className="w-px h-3 bg-slate-200"></div>
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              <span className="text-slate-500">Saved</span>
+              <span className="font-mono font-bold text-emerald-700">₹{(kpis.netRevenueSavedINR / 100000).toFixed(1)}L</span>
+            </div>
+          </div>
+        )}
 
         {/* Right: Global Search + Time Filter + Simulator + Alert Bell */}
         <div className="flex items-center gap-2.5 flex-wrap">

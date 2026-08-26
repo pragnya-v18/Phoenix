@@ -226,29 +226,24 @@ export class PipelineJobQueue {
    */
   private _persistToDiskAsync(): void {
     const snapshot = [...this.jobs];
-    fs.promises.mkdir(DATA_DIR, { recursive: true }).then(async () => {
+    fs.promises.mkdir(DATA_DIR, { recursive: true }).then(() => {
       const data = JSON.stringify(snapshot);
-      const fd = await fs.promises.open(JOBS_TEMP, 'wx');
+      // Remove stale temp file from a previous crashed write (Windows EEXIST fix)
+      try { fs.unlinkSync(JOBS_TEMP); } catch { /* didn't exist */ }
+      const fd = fs.openSync(JOBS_TEMP, 'wx');
       try {
-        await fd.writeFile(data, 'utf8');
-        await fd.sync();
+        fs.writeFileSync(fd, data, 'utf8');
+        fs.fsyncSync(fd);
       } finally {
-        await fd.close();
+        fs.closeSync(fd);
       }
-      // Atomic rename. On Windows, rename() fails if dest exists — try first,
-      // then unlink+retry only if needed. No pre-delete crash window.
-      try {
-        await fs.promises.rename(JOBS_TEMP, JOBS_PATH);
-      } catch (err: any) {
-        if (process.platform === 'win32' && (err.code === 'EPERM' || err.code === 'EBUSY')) {
-          await fs.promises.unlink(JOBS_PATH);
-          await fs.promises.rename(JOBS_TEMP, JOBS_PATH);
-        } else {
-          throw err;
-        }
+      // Atomic rename. On Windows, rename() fails if dest exists — delete first.
+      if (process.platform === 'win32') {
+        try { fs.unlinkSync(JOBS_PATH); } catch { /* first write */ }
       }
+      fs.renameSync(JOBS_TEMP, JOBS_PATH);
     }).catch((err) => {
-      fs.promises.unlink(JOBS_TEMP).catch(() => {});
+      try { fs.unlinkSync(JOBS_TEMP); } catch { /* already gone */ }
       console.warn('[JobQueue] Failed to persist jobs to disk:', err);
     });
   }

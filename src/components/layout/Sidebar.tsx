@@ -63,36 +63,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const navSections = [
     {
-      group: 'Core Operations',
+      group: 'Operations',
       items: [
-        { id: 'dashboard', label: 'Command Center', icon: Activity, badge: undefined },
+        { id: 'dashboard', label: 'Mission Control', icon: Activity, badge: undefined },
         { 
           id: 'cases', 
-          label: 'Recovery Cases', 
+          label: 'Case Intelligence', 
           icon: Layers, 
           badge: kpis?.activeCasesCount ? `${kpis.activeCasesCount}` : undefined,
-          badgeColor: 'bg-indigo-500 text-white' 
+          badgeColor: 'bg-amber-500/20 text-amber-300' 
         },
-        { id: 'agents', label: 'Agent DAG Mesh', icon: Bot, badge: '7 Nodes', badgeColor: 'bg-emerald-500/20 text-emerald-300' }
+        { id: 'agents', label: 'Agent Orchestration', icon: Bot, badge: '7 Nodes', badgeColor: 'bg-emerald-500/20 text-emerald-300' }
       ]
     },
     {
-      group: 'Protocols & Switch',
+      group: 'Protocols',
       items: [
-        { id: 'acp', label: 'ACP 2.0 Sandbox', icon: Sparkles, badge: 'A2A', badgeColor: 'bg-violet-500/20 text-violet-300' },
+        { id: 'acp', label: 'Protocol Monitor', icon: Sparkles, badge: 'ACP', badgeColor: 'bg-violet-500/20 text-violet-300' },
         { 
           id: 'bank-radar', 
-          label: 'Bank Switch Radar', 
+          label: 'Switch Telemetry', 
           icon: Radio, 
-          badge: degradedBanks.length > 0 ? `${degradedBanks.length} Alert` : '100%',
+          badge: degradedBanks.length > 0 ? `${degradedBanks.length} Alert` : 'Healthy',
           badgeColor: degradedBanks.length > 0 ? 'bg-amber-500 text-slate-900 font-bold' : 'bg-emerald-500/20 text-emerald-300'
         }
       ]
     },
     {
-      group: 'Governance & Trust',
+      group: 'Compliance',
       items: [
-        { id: 'audits', label: 'Audit Ledger', icon: FileText, badge: undefined }
+        { id: 'audits', label: 'Forensic Timeline', icon: FileText, badge: undefined }
       ]
     }
   ];
@@ -118,7 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     v2.0
                   </span>
                 </div>
-                <div className="text-[11px] text-slate-400 font-medium">Razorpay AI Recovery</div>
+                <div className="text-[11px] text-slate-400 font-medium">AI Recovery OS</div>
               </div>
             )}
           </div>
@@ -183,6 +183,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Bottom Telemetry & Operator Profile Section */}
       <div className="p-3 border-t border-slate-800/80 bg-slate-950/60 space-y-3">
+        {/* System Status Indicator */}
+        {!collapsed ? (
+          <div className="px-2.5 py-1.5 rounded-lg flex items-center gap-2 text-[10px]">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${degradedBanks.length > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`}></span>
+            <span className="text-slate-400 font-medium">
+              {degradedBanks.length > 0 ? `${degradedBanks.length} switch${degradedBanks.length > 1 ? 's' : ''} degraded` : 'All Systems Operational'}
+            </span>
+          </div>
+        ) : null}
+
         {/* System Mesh Status Card (when expanded) */}
         {!collapsed ? (
           <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800/80 space-y-2 text-[11px]">
@@ -256,6 +266,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         )}
       </div>
+
+      {/* AI Engine Badge */}
+      {!collapsed && (
+        <div className="px-5 pb-3 text-center">
+          <span className="text-[9px] text-slate-600 font-medium">Powered by Gemini 3.7 Flash</span>
+        </div>
+      )}
     </aside>
   );
 };

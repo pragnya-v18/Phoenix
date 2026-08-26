@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { ExecutiveDashboard } from './components/ExecutiveDashboard';
@@ -11,6 +12,7 @@ import { CaseDetailModal } from './components/modals/CaseDetailModal';
 import { RecoveryCase } from './types';
 import { useDataPolling } from './hooks/useDataPolling';
 import { useSimulationApi } from './hooks/useSimulationApi';
+import { ShieldCheck } from 'lucide-react';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -35,9 +37,15 @@ export function App() {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
         <div className="text-center space-y-4 p-8 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl max-w-sm">
-          <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <div className="font-bold text-sm text-slate-200">Connecting to RecoverFlow Agent Mesh...</div>
-          <div className="text-xs text-slate-400">Initializing Razorpay Webhook Ingestion & Bank Telemetry Radar</div>
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center mx-auto shadow-lg shadow-indigo-500/20">
+            <ShieldCheck className="w-7 h-7 text-white" />
+          </div>
+          <div className="space-y-1">
+            <div className="font-bold text-sm text-slate-200">RecoverFlow</div>
+            <div className="text-[11px] text-slate-400">AI Recovery Operating System</div>
+          </div>
+          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <div className="text-[11px] text-slate-500">Initializing agent mesh & bank telemetry...</div>
         </div>
       </div>
     );
@@ -95,56 +103,70 @@ export function App() {
 
         {/* View Content */}
         <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
-          {activeTab === 'dashboard' && (
-            <ExecutiveDashboard
-              kpis={dataPolling.kpis}
-              cases={displayedCases}
-              bankHealth={dataPolling.bankHealth}
-              onSelectCase={(c) => setSelectedCase(c)}
-              onNavigateTab={(tab) => setActiveTab(tab)}
-              onRunAgent={simApi.runAgent}
-              isRunningAgent={simApi.isRunningAgent}
-              timeRange={timeRange}
-            />
-          )}
+          <AnimatePresence mode="wait">
+            {activeTab === 'dashboard' && (
+              <motion.div key="dashboard" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <ExecutiveDashboard
+                  kpis={dataPolling.kpis}
+                  cases={displayedCases}
+                  bankHealth={dataPolling.bankHealth}
+                  onSelectCase={(c) => setSelectedCase(c)}
+                  onNavigateTab={(tab) => setActiveTab(tab)}
+                  onRunAgent={simApi.runAgent}
+                  isRunningAgent={simApi.isRunningAgent}
+                  timeRange={timeRange}
+                />
+              </motion.div>
+            )}
 
-          {activeTab === 'cases' && (
-            <RecoveryCasesView
-              cases={displayedCases}
-              onSelectCase={(c) => setSelectedCase(c)}
-              onRunAgent={simApi.runAgent}
-              isRunningAgent={simApi.isRunningAgent}
-            />
-          )}
+            {activeTab === 'cases' && (
+              <motion.div key="cases" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <RecoveryCasesView
+                  cases={displayedCases}
+                  onSelectCase={(c) => setSelectedCase(c)}
+                  onRunAgent={simApi.runAgent}
+                  isRunningAgent={simApi.isRunningAgent}
+                />
+              </motion.div>
+            )}
 
-          {activeTab === 'agents' && (
-            <AgentMonitorView
-              cases={displayedCases}
-              selectedCase={selectedCase}
-              onSelectCase={(c) => setSelectedCase(c)}
-            />
-          )}
+            {activeTab === 'agents' && (
+              <motion.div key="agents" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <AgentMonitorView
+                  cases={displayedCases}
+                  selectedCase={selectedCase}
+                  onSelectCase={(c) => setSelectedCase(c)}
+                />
+              </motion.div>
+            )}
 
-          {activeTab === 'acp' && (
-            <AcpSandboxView
-              cases={displayedCases}
-              selectedCase={selectedCase}
-              onSelectCase={(c) => setSelectedCase(c)}
-              onSendNegotiation={simApi.sendNegotiation}
-              isSending={false}
-            />
-          )}
+            {activeTab === 'acp' && (
+              <motion.div key="acp" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <AcpSandboxView
+                  cases={displayedCases}
+                  selectedCase={selectedCase}
+                  onSelectCase={(c) => setSelectedCase(c)}
+                  onSendNegotiation={simApi.sendNegotiation}
+                  isSending={false}
+                />
+              </motion.div>
+            )}
 
-          {activeTab === 'bank-radar' && (
-            <BankHealthRadar
-              bankHealth={dataPolling.bankHealth}
-              onSimulateBankStatus={simApi.simulateBankStatus}
-            />
-          )}
+            {activeTab === 'bank-radar' && (
+              <motion.div key="bank-radar" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <BankHealthRadar
+                  bankHealth={dataPolling.bankHealth}
+                  onSimulateBankStatus={simApi.simulateBankStatus}
+                />
+              </motion.div>
+            )}
 
-          {activeTab === 'audits' && (
-            <AuditTrailView audits={dataPolling.audits} />
-          )}
+            {activeTab === 'audits' && (
+              <motion.div key="audits" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <AuditTrailView audits={dataPolling.audits} />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </main>
       </div>
 

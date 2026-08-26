@@ -48,20 +48,28 @@ const BACKUP_PATH = path.join(DATA_DIR, 'recoverflow_store.json.bak');
 const TEMP_PATH = path.join(DATA_DIR, 'recoverflow_store.json.tmp');
 
 // Initialize Firebase Admin SDK client
+// Skip Firestore entirely when no GCP credentials are available — avoids
+// unhandled async rejections from the gRPC auth layer that crash the process.
 let firestoreInstance: Firestore | null = null;
-try {
-  const app = getApps().length === 0
-    ? initializeApp({ projectId: PROJECT_ID })
-    : getApp();
+const hasADC = !!(process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.FIREBASE_SERVICE_ACCOUNT);
+const isProd = process.env.NODE_ENV === 'production';
 
-  firestoreInstance = getFirestore(app, FIRESTORE_DATABASE_ID);
-} catch (err) {
+if (hasADC || isProd) {
   try {
-    const app = getApps().length === 0 ? initializeApp() : getApp();
-    firestoreInstance = getFirestore(app);
-  } catch {
-    firestoreInstance = null;
+    const app = getApps().length === 0
+      ? initializeApp({ projectId: PROJECT_ID })
+      : getApp();
+    firestoreInstance = getFirestore(app, FIRESTORE_DATABASE_ID);
+  } catch (err) {
+    try {
+      const app = getApps().length === 0 ? initializeApp() : getApp();
+      firestoreInstance = getFirestore(app);
+    } catch {
+      firestoreInstance = null;
+    }
   }
+} else {
+  console.warn('[Storage] No GCP credentials found — running in local-only mode (disk + memory).');
 }
 
 export class FirestoreDatabase {
@@ -154,7 +162,8 @@ export class FirestoreDatabase {
 
       const data = JSON.stringify(snapshot, null, 2);
 
-      // Step 2: Write to temp file (wx fails if stale temp exists from prior crash)
+      // Step 2: Remove stale temp file from prior crash, then write fresh
+      try { fs.unlinkSync(TEMP_PATH); } catch { /* didn't exist */ }
       const fd = fs.openSync(TEMP_PATH, 'wx');
       try {
         fs.writeSync(fd, data, 0, 'utf8');

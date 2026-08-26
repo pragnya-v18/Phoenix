@@ -7,5 +7,5 @@ export { UnitEconomicsPanel } from './UnitEconomicsPanel';
 export { ChannelBreakdownCard } from './ChannelBreakdownCard';
 export { RootCauseForensicsCard } from './RootCauseForensicsCard';
 export { CasesTriageTable } from './CasesTriageTable';
-export { AgentFunnelCard } from './AgentFunnelCard';
+export { RecoveryPipeline } from './AgentFunnelCard';
 export { BankRadarCard } from './BankRadarCard';

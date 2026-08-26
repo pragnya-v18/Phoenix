@@ -216,20 +216,23 @@ export class IdempotencyService {
 
     const data = JSON.stringify(snapshot);
 
-    // Fire-and-forget: async write, no await, no blocking
+    // Fire-and-forget: sync file I/O inside async mkdir for Windows reliability
     fs.promises.mkdir(DATA_DIR, { recursive: true }).then(() => {
-      return fs.promises.open(LOCKS_TEMP, 'wx');
-    }).then(fd => {
-      return fd.writeFile(data, 'utf8').then(() => fd.sync()).then(() => fd.close());
-    }).then(() => {
-      if (process.platform === 'win32') {
-        return fs.promises.unlink(LOCKS_PATH).catch(() => {});
+      try { fs.unlinkSync(LOCKS_TEMP); } catch { /* didn't exist */ }
+      const fd = fs.openSync(LOCKS_TEMP, 'wx');
+      try {
+        fs.writeFileSync(fd, data, 'utf8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
       }
-    }).then(() => {
-      return fs.promises.rename(LOCKS_TEMP, LOCKS_PATH);
+      if (process.platform === 'win32') {
+        try { fs.unlinkSync(LOCKS_PATH); } catch { /* first write */ }
+      }
+      fs.renameSync(LOCKS_TEMP, LOCKS_PATH);
     }).catch(() => {
       // Best-effort: disk failure does not affect in-memory lock correctness
-      fs.promises.unlink(LOCKS_TEMP).catch(() => {});
+      try { fs.unlinkSync(LOCKS_TEMP); } catch { /* already gone */ }
     });
   }
 

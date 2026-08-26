@@ -1,1 +1,63 @@
 @import "tailwindcss";
+
+/* RecoverFlow v2.0 — AI Recovery Operating System Design System */
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+
+  --color-surface-primary: #f8fafc;
+  --color-surface-elevated: #ffffff;
+  --color-surface-subtle: #f1f5f9;
+  --color-border-subtle: #e2e8f0;
+
+  --color-recovered: #059669;
+  --color-risk-critical: #dc2626;
+  --color-risk-high: #d97706;
+  --color-risk-medium: #6366f1;
+  --color-agent-active: #6366f1;
+  --color-agent-glow: rgba(99, 102, 241, 0.15);
+  --color-compliance-halt: #e11d48;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Pipeline connector line */
+.pipeline-connector {
+  position: relative;
+}
+.pipeline-connector::before {
+  content: '';
+  position: absolute;
+  left: 19px;
+  top: 40px;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(to bottom, #e2e8f0, #cbd5e1);
+}
+
+/* Glass panel effect */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Subtle glow pulse for active elements */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+  50% { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1); }
+}
+.glow-pulse { animation: glow-pulse 2s ease-in-out infinite; }
+
+/* Flowing dot animation for active pipeline edges */
+@keyframes flow-dot {
+  0% { transform: translateY(0); opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateY(100%); opacity: 0; }
+}
