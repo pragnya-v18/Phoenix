@@ -11,7 +11,7 @@
  * - NACH e-Mandates / AutoPay: Flat ₹5.00 (+ 18% GST = ₹5.90)
  */
 
-import { PaymentMethod } from '../src/types.js';
+import { PaymentMethod } from '../src/types/index.js';
 
 export interface MDRCalculationResult {
   method: PaymentMethod;

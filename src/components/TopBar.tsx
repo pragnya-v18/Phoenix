@@ -1,21 +1,38 @@
 import React, { useState } from 'react';
-import { 
-  Search, 
-  Sparkles, 
-  ChevronDown, 
-  Radio, 
-  Bell, 
-  Calendar, 
-  SlidersHorizontal,
-  RefreshCw,
-  Zap,
-  ArrowUpRight,
-  ShieldCheck,
+import {
+  Search,
+  Sparkles,
+  ChevronDown,
+  Radio,
+  Bell,
   ShoppingCart,
   FileText,
-  Phone
+  Phone,
+  Zap,
+  LucideIcon
 } from 'lucide-react';
 import { ExecutiveKPIs, BankHealthMetric } from '../types';
+
+interface SimConfig {
+  label: string;
+  amount: string;
+  amountColor: string;
+  amountBg: string;
+  description: string;
+  action: () => void;
+  isBatch?: boolean;
+  batchBg?: string;
+  batchHoverBg?: string;
+  batchBorder?: string;
+  batchTextColor?: string;
+}
+
+interface SimSection {
+  title: string;
+  icon: LucideIcon;
+  iconColor: string;
+  items: SimConfig[];
+}
 
 interface TopBarProps {
   activeTab: string;
@@ -70,6 +87,70 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const currentTabInfo = tabTitles[activeTab] || { title: 'Command Center', subtitle: 'Razorpay AI Revenue Recovery' };
 
+  const closeMenu = () => setShowSimMenu(false);
+
+  const simSections: SimSection[] = [
+    {
+      title: 'Simulate Live Razorpay Failure Webhooks',
+      icon: Sparkles,
+      iconColor: 'text-indigo-500',
+      items: [
+        { label: '1. UPI Daily Limit Exceeded', amount: '₹5,499', amountColor: 'text-emerald-700', amountBg: 'bg-emerald-50', description: 'Autonomous Card switch + 5% incentive via ACP', action: () => onSimulate('UPI_LIMIT') },
+        { label: '2. Issuer Outage (SBI NetBanking)', amount: '₹3,200', amountColor: 'text-amber-700', amountBg: 'bg-amber-50', description: 'Bank radar detection + optimal backoff retry delay', action: () => onSimulate('SBI_DOWNTIME') },
+        { label: '3. High-Value B2B SaaS Deal', amount: '₹48,500', amountColor: 'text-rose-700', amountBg: 'bg-rose-50', description: 'Circuit breaker trigger + Human-in-the-Loop review', action: () => onSimulate('HIGH_VALUE_B2B') },
+        { label: '4. e-Mandate Expired (Recurring)', amount: '₹1,499', amountColor: 'text-indigo-700', amountBg: 'bg-indigo-50', description: '1-click WhatsApp interactive token renewal', action: () => onSimulate('SUBSCRIPTION_HALT') },
+        {
+          label: '5. Run Batch Ingestion (5 Payments)', amount: '₹1,03,496', amountColor: 'text-indigo-700', amountBg: 'bg-white', description: 'Simulate multi-channel failure stream & compute live recovery evidence',
+          action: () => { if (onSimulateBatch) onSimulateBatch(5); },
+          isBatch: true, batchBg: 'bg-indigo-50/70', batchHoverBg: 'bg-indigo-100/70', batchBorder: 'border-indigo-200/60', batchTextColor: 'text-indigo-950'
+        }
+      ]
+    },
+    {
+      title: 'Checkout Abandonment Recovery',
+      icon: ShoppingCart,
+      iconColor: 'text-emerald-500',
+      items: [
+        { label: '6. High-Value Enterprise Cart', amount: '₹34,999', amountColor: 'text-emerald-700', amountBg: 'bg-emerald-50', description: 'Platinum CLV, 3-item cart, abandoned at Payment Auth', action: () => { if (onSimulateCheckout) onSimulateCheckout('HIGH_VALUE_CART'); } },
+        { label: '7. OTP Timeout (Card 2FA)', amount: '₹12,499', amountColor: 'text-amber-700', amountBg: 'bg-amber-50', description: 'Session expired at OTP entry, transient — 1-click retry', action: () => { if (onSimulateCheckout) onSimulateCheckout('OTP_TIMEOUT'); } },
+        {
+          label: '8. Run Checkout Batch (4 Abandonments)', amount: '₹59,996', amountColor: 'text-emerald-700', amountBg: 'bg-white', description: 'Multi-stage checkout abandonment stream across devices',
+          action: () => { if (onSimulateCheckoutBatch) onSimulateCheckoutBatch(4); },
+          isBatch: true, batchBg: 'bg-emerald-50/70', batchHoverBg: 'bg-emerald-100/70', batchBorder: 'border-emerald-200/60', batchTextColor: 'text-emerald-950'
+        }
+      ]
+    },
+    {
+      title: 'B2B Receivables Recovery',
+      icon: FileText,
+      iconColor: 'text-orange-500',
+      items: [
+        { label: '9. 15-Day Overdue (Approval Delay)', amount: '₹87,500', amountColor: 'text-amber-700', amountBg: 'bg-amber-50', description: 'Gold CLV, 85% on-time history, procurement approval stuck', action: () => { if (onSimulateInvoice) onSimulateInvoice('APPROVAL_DELAY'); } },
+        { label: '10. 72-Day Overdue (Cash Flow Issue)', amount: '₹3,20,000', amountColor: 'text-rose-700', amountBg: 'bg-rose-50', description: 'Platinum CLV, 45% on-time, manufacturing sector cash crunch', action: () => { if (onSimulateInvoice) onSimulateInvoice('CASHFLOW_ISSUE'); } },
+        {
+          label: '11. Run Receivables Batch (4 Invoices)', amount: '₹11,32,500', amountColor: 'text-orange-700', amountBg: 'bg-white', description: 'Multi-DPD overdue invoice stream across B2B accounts',
+          action: () => { if (onSimulateInvoiceBatch) onSimulateInvoiceBatch(4); },
+          isBatch: true, batchBg: 'bg-orange-50/70', batchHoverBg: 'bg-orange-100/70', batchBorder: 'border-orange-200/60', batchTextColor: 'text-orange-950'
+        }
+      ]
+    },
+    {
+      title: 'Voice Recovery Agent (Hinglish)',
+      icon: Phone,
+      iconColor: 'text-violet-500',
+      items: [
+        { label: '12. UPI Fail → Hinglish Voice Call', amount: '₹2,499', amountColor: 'text-violet-700', amountBg: 'bg-violet-50', description: 'Insufficient funds, friendly tone, promise-to-pay flow', action: () => { if (onSimulateVoiceCall) onSimulateVoiceCall('PAYMENT_FAILED', 'HINGLISH', 'FRIENDLY'); } },
+        { label: '13. Cart Abandon → English Voice Call', amount: '₹14,999', amountColor: 'text-violet-700', amountBg: 'bg-violet-50', description: 'High-value desktop checkout, 5% discount offered', action: () => { if (onSimulateVoiceCall) onSimulateVoiceCall('CHECKOUT_ABANDONED', 'ENGLISH', 'PROFESSIONAL'); } },
+        { label: '14. Overdue Invoice → Hinglish Voice Call', amount: '₹87,500', amountColor: 'text-rose-700', amountBg: 'bg-rose-50', description: '45-day overdue, empathetic tone, 2% settlement offer', action: () => { if (onSimulateVoiceCall) onSimulateVoiceCall('INVOICE_OVERDUE', 'HINGLISH', 'EMPATHETIC'); } },
+        {
+          label: '15. Run Voice Batch (4 Calls)', amount: '₹1,12,998', amountColor: 'text-violet-700', amountBg: 'bg-white', description: 'Multi-language voice recovery stream across all event types',
+          action: () => { if (onSimulateVoiceBatch) onSimulateVoiceBatch(4); },
+          isBatch: true, batchBg: 'bg-violet-50/70', batchHoverBg: 'bg-violet-100/70', batchBorder: 'border-violet-200/60', batchTextColor: 'text-violet-950'
+        }
+      ]
+    }
+  ];
+
   return (
     <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 py-3 transition-all">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -91,7 +172,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Right: Global Search + Time Filter + Simulator + Alert Bell */}
         <div className="flex items-center gap-2.5 flex-wrap">
-          {/* Global Search Bar (⌘K style) */}
+          {/* Global Search Bar */}
           <div className="relative min-w-[220px] sm:min-w-[260px]">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -113,8 +194,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                 key={t}
                 onClick={() => setTimeRange(t)}
                 className={`px-2.5 py-1 rounded-lg transition-all ${
-                  timeRange === t 
-                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80' 
+                  timeRange === t
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
                     : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
@@ -137,272 +218,59 @@ export const TopBar: React.FC<TopBarProps> = ({
 
             {showSimMenu && (
               <>
-                <div 
-                  className="fixed inset-0 z-40" 
-                  onClick={() => setShowSimMenu(false)}
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={closeMenu}
                 />
                 <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-2 z-50 animate-in fade-in zoom-in-95">
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 mb-1">
-                    Simulate Live Razorpay Failure Webhooks
-                  </div>
-                  
-                  <button
-                    onClick={() => {
-                      onSimulate('UPI_LIMIT');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">1. UPI Daily Limit Exceeded</span>
-                      <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded">₹5,499</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Autonomous Card switch + 5% incentive via ACP</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      onSimulate('SBI_DOWNTIME');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">2. Issuer Outage (SBI NetBanking)</span>
-                      <span className="text-[10px] font-mono text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded">₹3,200</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Bank radar detection + optimal backoff retry delay</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      onSimulate('HIGH_VALUE_B2B');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">3. High-Value B2B SaaS Deal</span>
-                      <span className="text-[10px] font-mono text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded">₹48,500</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Circuit breaker trigger + Human-in-the-Loop review</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      onSimulate('SUBSCRIPTION_HALT');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">4. e-Mandate Expired (Recurring)</span>
-                      <span className="text-[10px] font-mono text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded">₹1,499</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">1-click WhatsApp interactive token renewal</span>
-                  </button>
-
-                  <div className="my-1 border-t border-slate-100"></div>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateBatch) onSimulateBatch(5);
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 bg-indigo-50/70 hover:bg-indigo-100/70 rounded-xl text-xs transition-colors flex flex-col gap-0.5 border border-indigo-200/60"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-indigo-950 flex items-center gap-1">
-                        <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
-                        5. Run Batch Ingestion (5 Payments)
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-indigo-700 bg-white px-1.5 py-0.2 rounded border border-indigo-200">
-                        ₹1,03,496
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-indigo-700 font-medium">
-                      Simulate multi-channel failure stream & compute live recovery evidence
-                    </span>
-                  </button>
-
-                  <div className="my-1 border-t border-slate-100"></div>
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                    <ShoppingCart className="w-3 h-3 text-emerald-500" />
-                    Checkout Abandonment Recovery
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateCheckout) onSimulateCheckout('HIGH_VALUE_CART');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">6. High-Value Enterprise Cart</span>
-                      <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded">₹34,999</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Platinum CLV, 3-item cart, abandoned at Payment Auth</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateCheckout) onSimulateCheckout('OTP_TIMEOUT');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">7. OTP Timeout (Card 2FA)</span>
-                      <span className="text-[10px] font-mono text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded">₹12,499</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Session expired at OTP entry, transient — 1-click retry</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateCheckoutBatch) onSimulateCheckoutBatch(4);
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 bg-emerald-50/70 hover:bg-emerald-100/70 rounded-xl text-xs transition-colors flex flex-col gap-0.5 border border-emerald-200/60"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-emerald-950 flex items-center gap-1">
-                        <Zap className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
-                        8. Run Checkout Batch (4 Abandonments)
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-white px-1.5 py-0.2 rounded border border-emerald-200">
-                        ₹59,996
-                      </span>
-                    </div>
-                      <span className="text-[11px] text-emerald-700 font-medium">
-                      Multi-stage checkout abandonment stream across devices
-                    </span>
-                  </button>
-
-                  <div className="my-1 border-t border-slate-100"></div>
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                    <FileText className="w-3 h-3 text-orange-500" />
-                    B2B Receivables Recovery
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateInvoice) onSimulateInvoice('APPROVAL_DELAY');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">9. 15-Day Overdue (Approval Delay)</span>
-                      <span className="text-[10px] font-mono text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded">₹87,500</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Gold CLV, 85% on-time history, procurement approval stuck</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateInvoice) onSimulateInvoice('CASHFLOW_ISSUE');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">10. 72-Day Overdue (Cash Flow Issue)</span>
-                      <span className="text-[10px] font-mono text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded">₹3,20,000</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Platinum CLV, 45% on-time, manufacturing sector cash crunch</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateInvoiceBatch) onSimulateInvoiceBatch(4);
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 bg-orange-50/70 hover:bg-orange-100/70 rounded-xl text-xs transition-colors flex flex-col gap-0.5 border border-orange-200/60"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-orange-950 flex items-center gap-1">
-                        <Zap className="w-3.5 h-3.5 text-orange-600 fill-orange-600" />
-                        11. Run Receivables Batch (4 Invoices)
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-orange-700 bg-white px-1.5 py-0.2 rounded border border-orange-200">
-                        ₹11,32,500
-                      </span>
-                    </div>
-                      <span className="text-[11px] text-orange-700 font-medium">
-                      Multi-DPD overdue invoice stream across B2B accounts
-                    </span>
-                  </button>
-
-                  <div className="my-1 border-t border-slate-100"></div>
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                    <Phone className="w-3 h-3 text-violet-500" />
-                    Voice Recovery Agent (Hinglish)
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateVoiceCall) onSimulateVoiceCall('PAYMENT_FAILED', 'HINGLISH', 'FRIENDLY');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">12. UPI Fail → Hinglish Voice Call</span>
-                      <span className="text-[10px] font-mono text-violet-700 bg-violet-50 px-1.5 py-0.2 rounded">₹2,499</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">Insufficient funds, friendly tone, promise-to-pay flow</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateVoiceCall) onSimulateVoiceCall('CHECKOUT_ABANDONED', 'ENGLISH', 'PROFESSIONAL');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">13. Cart Abandon → English Voice Call</span>
-                      <span className="text-[10px] font-mono text-violet-700 bg-violet-50 px-1.5 py-0.2 rounded">₹14,999</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">High-value desktop checkout, 5% discount offered</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateVoiceCall) onSimulateVoiceCall('INVOICE_OVERDUE', 'HINGLISH', 'EMPATHETIC');
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">14. Overdue Invoice → Hinglish Voice Call</span>
-                      <span className="text-[10px] font-mono text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded">₹87,500</span>
-                    </div>
-                    <span className="text-[11px] text-slate-500">45-day overdue, empathetic tone, 2% settlement offer</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (onSimulateVoiceBatch) onSimulateVoiceBatch(4);
-                      setShowSimMenu(false);
-                    }}
-                    className="w-full text-left p-2.5 bg-violet-50/70 hover:bg-violet-100/70 rounded-xl text-xs transition-colors flex flex-col gap-0.5 border border-violet-200/60"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-violet-950 flex items-center gap-1">
-                        <Zap className="w-3.5 h-3.5 text-violet-600 fill-violet-600" />
-                        15. Run Voice Batch (4 Calls)
-                      </span>
-                      <span className="text-[10px] font-mono font-bold text-violet-700 bg-white px-1.5 py-0.2 rounded border border-violet-200">
-                        ₹1,12,998
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-violet-700 font-medium">
-                      Multi-language voice recovery stream across all event types
-                    </span>
-                  </button>
+                  {simSections.map((section, sIdx) => (
+                    <React.Fragment key={sIdx}>
+                      {sIdx > 0 && <div className="my-1 border-t border-slate-100"></div>}
+                      <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <section.icon className={`w-3 h-3 ${section.iconColor}`} />
+                        {section.title}
+                      </div>
+                      {section.items.map((item, iIdx) => {
+                        if (item.isBatch) {
+                          return (
+                            <button
+                              key={iIdx}
+                              onClick={() => { item.action(); closeMenu(); }}
+                              className={`w-full text-left p-2.5 ${item.batchBg} hover:${item.batchHoverBg} rounded-xl text-xs transition-colors flex flex-col gap-0.5 border ${item.batchBorder}`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className={`font-bold ${item.batchTextColor} flex items-center gap-1`}>
+                                  <Zap className={`w-3.5 h-3.5 ${section.iconColor} fill-current`} />
+                                  {item.label}
+                                </span>
+                                <span className={`text-[10px] font-mono font-bold ${item.amountColor} ${item.amountBg} px-1.5 py-0.2 rounded border ${item.batchBorder}`}>
+                                  {item.amount}
+                                </span>
+                              </div>
+                              <span className={`text-[11px] ${item.batchTextColor} font-medium`}>
+                                {item.description}
+                              </span>
+                            </button>
+                          );
+                        }
+                        return (
+                          <button
+                            key={iIdx}
+                            onClick={() => { item.action(); closeMenu(); }}
+                            className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-900">{item.label}</span>
+                              <span className={`text-[10px] font-mono ${item.amountColor} ${item.amountBg} px-1.5 py-0.2 rounded`}>
+                                {item.amount}
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-slate-500">{item.description}</span>
+                          </button>
+                        );
+                      })}
+                    </React.Fragment>
+                  ))}
                 </div>
               </>
             )}

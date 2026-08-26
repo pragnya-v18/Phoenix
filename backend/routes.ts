@@ -5,11 +5,14 @@
 
 import { Router, Request, Response } from 'express';
 import { db } from './db.js';
-import { AgentSupervisor, waitForPipeline, acquireCaseLock } from './agents.js';
+import { AgentSupervisor } from './agents.js';
+import { waitForPipeline, acquireCaseLock } from './shared/index.js';
 import { RazorpayService } from './razorpay.js';
+import { SimulationService } from './simulations.js';
+import { VoiceAgentService } from './voice-agent.js';
 import { FinancialAccountingEngine } from './financials.js';
 import { pipelineJobQueue } from './job-queue.js';
-import { RecoveryCase, CaseStatus } from '../src/types.js';
+import { RecoveryCase, CaseStatus } from '../src/types/index.js';
 
 export const apiRouter = Router();
 
@@ -109,7 +112,7 @@ apiRouter.post('/razorpay/reconcile/:caseId', async (req: Request, res: Response
 apiRouter.post('/simulate/incoming-failure', async (req: Request, res: Response) => {
   const { scenario } = req.body;
   try {
-    const createdCase = await RazorpayService.simulateIncomingFailure(
+    const createdCase = await SimulationService.simulateIncomingFailure(
       scenario || 'UPI_LIMIT'
     );
     res.json({
@@ -126,7 +129,7 @@ apiRouter.post('/simulate/incoming-failure', async (req: Request, res: Response)
 apiRouter.post(['/simulate/batch-stream', '/simulate/batch-failures'], async (req: Request, res: Response) => {
   const batchSize = Number(req.body.batchSize) || 5;
   try {
-    const batchResult = await RazorpayService.simulateBatchFailureStream(batchSize);
+    const batchResult = await SimulationService.simulateBatchFailureStream(batchSize);
     res.json({
       success: true,
       message: `Simulated batch of ${batchResult.casesCreated.length} failed payments ingested. Multi-Agent pipelines triggered.`,
@@ -143,7 +146,7 @@ apiRouter.post(['/simulate/batch-stream', '/simulate/batch-failures'], async (re
 apiRouter.post('/simulate/checkout-abandonment', async (req: Request, res: Response) => {
   const { scenario } = req.body;
   try {
-    const createdCase = await RazorpayService.simulateCheckoutAbandonment(
+    const createdCase = await SimulationService.simulateCheckoutAbandonment(
       scenario || 'HIGH_VALUE_CART'
     );
     res.json({
@@ -160,7 +163,7 @@ apiRouter.post('/simulate/checkout-abandonment', async (req: Request, res: Respo
 apiRouter.post('/simulate/checkout-batch', async (req: Request, res: Response) => {
   const batchSize = Number(req.body.batchSize) || 4;
   try {
-    const batchResult = await RazorpayService.simulateCheckoutBatchStream(batchSize);
+    const batchResult = await SimulationService.simulateCheckoutBatchStream(batchSize);
     res.json({
       success: true,
       message: `Simulated ${batchResult.casesCreated.length} checkout abandonments. Checkout Recovery pipelines triggered.`,
@@ -183,7 +186,7 @@ apiRouter.get('/analytics/checkout-metrics', (req: Request, res: Response) => {
 apiRouter.post('/simulate/overdue-invoice', async (req: Request, res: Response) => {
   const { scenario } = req.body;
   try {
-    const createdCase = await RazorpayService.simulateOverdueInvoice(
+    const createdCase = await SimulationService.simulateOverdueInvoice(
       scenario || 'APPROVAL_DELAY'
     );
     res.json({
@@ -200,7 +203,7 @@ apiRouter.post('/simulate/overdue-invoice', async (req: Request, res: Response) 
 apiRouter.post('/simulate/receivables-batch', async (req: Request, res: Response) => {
   const batchSize = Number(req.body.batchSize) || 4;
   try {
-    const batchResult = await RazorpayService.simulateReceivablesBatchStream(batchSize);
+    const batchResult = await SimulationService.simulateReceivablesBatchStream(batchSize);
     res.json({
       success: true,
       message: `Simulated ${batchResult.casesCreated.length} overdue invoices. B2B Receivables Recovery pipelines triggered.`,
@@ -223,7 +226,7 @@ apiRouter.get('/analytics/receivables-metrics', (req: Request, res: Response) =>
 apiRouter.post('/simulate/voice-call', async (req: Request, res: Response) => {
   const { eventType, language, tone, outcome } = req.body;
   try {
-    const createdCase = await AgentSupervisor.simulateVoiceCall(
+    const createdCase = await VoiceAgentService.simulateVoiceCall(
       eventType || 'PAYMENT_FAILED',
       language || 'HINGLISH',
       tone || 'FRIENDLY',
@@ -243,7 +246,7 @@ apiRouter.post('/simulate/voice-call', async (req: Request, res: Response) => {
 apiRouter.post('/simulate/voice-batch', async (req: Request, res: Response) => {
   const batchSize = Number(req.body.batchSize) || 4;
   try {
-    const batchResult = await AgentSupervisor.simulateVoiceBatch(batchSize);
+    const batchResult = await VoiceAgentService.simulateVoiceBatch(batchSize);
     res.json({
       success: true,
       message: `Simulated ${batchResult.casesCreated.length} voice recovery calls. Total call value: ₹${batchResult.totalCallValueINR.toLocaleString('en-IN')}.`,

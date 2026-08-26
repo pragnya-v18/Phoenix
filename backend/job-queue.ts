@@ -19,7 +19,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { RecoveryCase, ChannelType } from '../src/types.js';
+import { RecoveryCase, ChannelType } from '../src/types/index.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const JOBS_PATH = path.join(DATA_DIR, 'pipeline_jobs.json');
