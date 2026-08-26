@@ -105,13 +105,20 @@ export async function handlePaymentLinkPaid(
   const allCases = db.getAllCases();
   const refCaseId = paymentLink.notes?.caseId || paymentLink.reference_id?.split('_')[1];
 
-  const matchedCase = allCases.find(c => {
-    if (c.status === 'RECOVERED' || c.status === 'DISMISSED') return false;
-    return (refCaseId && c.caseId.toLowerCase() === refCaseId.toLowerCase()) ||
-      (paymentLink.id && c.outcome?.paymentLinkId === paymentLink.id) ||
-      (payment?.id && c.sourceEvent.paymentId === payment.id) ||
-      (payment?.order_id && c.sourceEvent.orderId === payment.order_id);
-  });
+  // M1: Fast path — O(1) index lookups, fall back to O(n) scan only if needed
+  let matchedCase: RecoveryCase | undefined;
+  if (refCaseId) {
+    matchedCase = allCases.find(c => c.caseId.toLowerCase() === refCaseId.toLowerCase() && c.status !== 'RECOVERED' && c.status !== 'DISMISSED');
+  }
+  if (!matchedCase && paymentLink.id) {
+    matchedCase = allCases.find(c => c.outcome?.paymentLinkId === paymentLink.id && c.status !== 'RECOVERED' && c.status !== 'DISMISSED');
+  }
+  if (!matchedCase && payment?.id) {
+    matchedCase = allCases.find(c => c.sourceEvent.paymentId === payment.id && c.status !== 'RECOVERED' && c.status !== 'DISMISSED');
+  }
+  if (!matchedCase && payment?.order_id) {
+    matchedCase = allCases.find(c => c.sourceEvent.orderId === payment.order_id && c.status !== 'RECOVERED' && c.status !== 'DISMISSED');
+  }
 
   if (matchedCase) {
     const settledAmount = (paymentLink.amount_paid || payment?.amount || paymentLink.amount || 0) / 100;
@@ -211,10 +218,18 @@ export async function handlePaymentCaptured(
   }
 
   const allCases = db.getAllCases();
-  const matchedCase = allCases.find(c =>
-    (c.sourceEvent.paymentId === payment.id || (payment.notes?.caseId && c.caseId === payment.notes.caseId)) &&
-    c.status !== 'RECOVERED' && c.status !== 'DISMISSED'
-  );
+  // M1: Fast path — O(1) index lookup by paymentId, fall back to scan
+  let matchedCase: RecoveryCase | undefined;
+  if (payment.id) {
+    matchedCase = allCases.find(c =>
+      c.sourceEvent.paymentId === payment.id && c.status !== 'RECOVERED' && c.status !== 'DISMISSED'
+    );
+  }
+  if (!matchedCase && payment.notes?.caseId) {
+    matchedCase = allCases.find(c =>
+      c.caseId === payment.notes.caseId && c.status !== 'RECOVERED' && c.status !== 'DISMISSED'
+    );
+  }
 
   if (matchedCase) {
     const settledAmount = (payment.amount || 0) / 100;
@@ -439,11 +454,28 @@ export async function handleRefundEvent(
   const refundAmount = (refund.amount || 0) / 100;
   const paymentId = refund.payment_id;
 
+  // M3: Guard — refuse to match if payment_id is missing (prevents undefined === undefined false-matches)
+  if (!paymentId) {
+    await db.addAuditLog({
+      caseId: 'UNMATCHED',
+      agentName: 'Refund Reconciliation Agent',
+      action: 'REFUND_IGNORED',
+      rationale: `Refund ${refund.id} has no payment_id — cannot match to any case. Amount: ₹${refundAmount}. Logged for manual review.`,
+      model: 'refund-reconciliation',
+      latencyMs: 3,
+      tokensUsed: 0
+    });
+    return {
+      status: 'REFUND_UNMATCHED',
+      actionTaken: `Refund ${eventType} has no payment_id — cannot match to any case.`
+    };
+  }
+
   // Find the case that was originally recovered with this payment
   const allCases = db.getAllCases();
   const matchedCase = allCases.find(c =>
-    c.outcome?.settledPaymentId === paymentId ||
-    c.sourceEvent.paymentId === paymentId
+    (c.outcome?.settledPaymentId === paymentId || c.sourceEvent.paymentId === paymentId) &&
+    c.status === 'RECOVERED'
   );
 
   if (matchedCase && matchedCase.status === 'RECOVERED') {

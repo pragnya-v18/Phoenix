@@ -74,8 +74,15 @@ export class FirestoreDatabase {
   private bankHealthCache: Map<string, BankHealthMetric> = new Map();
   private deadLetterCache: Map<string, DeadLetterPayment> = new Map();
   
+  // O(1) indexes for webhook case lookups (M1)
+  private paymentIdIndex: Map<string, string> = new Map();   // paymentId → caseId
+  private orderIdIndex: Map<string, string> = new Map();      // orderId → caseId
+  private paymentLinkIdIndex: Map<string, string> = new Map(); // paymentLinkId → caseId
+
   private readonly MAX_CASES_CACHE = 2000;
   private readonly MAX_AUDIT_CACHE = 2000;
+  private readonly MAX_DEAD_LETTER_CACHE = 500;               // M2: dead-letter cap
+  private readonly DEAD_LETTER_TTL_MS = 7 * 24 * 60 * 60 * 1000; // M2: 7 days
 
   private evictCache<K, V>(map: Map<K, V>, maxSize: number) {
     if (map.size > maxSize) {
@@ -544,9 +551,24 @@ export class FirestoreDatabase {
 
   public async upsertCase(recoveryCase: RecoveryCase): Promise<RecoveryCase> {
     recoveryCase.updatedAt = new Date().toISOString();
+    
+    // M1: Update O(1) indexes
+    if (recoveryCase.sourceEvent.paymentId) {
+      this.paymentIdIndex.set(recoveryCase.sourceEvent.paymentId, recoveryCase.caseId);
+    }
+    if (recoveryCase.sourceEvent.orderId) {
+      this.orderIdIndex.set(recoveryCase.sourceEvent.orderId, recoveryCase.caseId);
+    }
+    if (recoveryCase.outcome?.paymentLinkId) {
+      this.paymentLinkIdIndex.set(recoveryCase.outcome.paymentLinkId, recoveryCase.caseId);
+    }
+
     this.casesCache.set(recoveryCase.caseId, recoveryCase);
     this.evictCache(this.casesCache, this.MAX_CASES_CACHE);
     this.saveToDisk();
+
+    // M4: Auto-reconcile dead-letter payments against this case
+    this.autoReconcileDeadLetters(recoveryCase);
 
     // Persist to Firestore if online
     if (this.firestore && this.firestoreOnline) {
@@ -647,6 +669,7 @@ export class FirestoreDatabase {
   // =========================================================================
   public addDeadLetterPayment(payment: DeadLetterPayment): void {
     this.deadLetterCache.set(payment.id, payment);
+    this.evictDeadLetterCache();  // M2: enforce cap + TTL
     this.saveToDisk();
     this.broadcast('dead-letter-added', { payment });
   }
@@ -668,6 +691,59 @@ export class FirestoreDatabase {
     payment.matchedAt = new Date().toISOString();
     this.saveToDisk();
     return true;
+  }
+
+  // M2: Evict expired + excess dead-letter entries
+  private evictDeadLetterCache(): void {
+    const now = Date.now();
+    // First: TTL eviction
+    for (const [id, entry] of this.deadLetterCache) {
+      if (now - new Date(entry.createdAt).getTime() > this.DEAD_LETTER_TTL_MS) {
+        this.deadLetterCache.delete(id);
+      }
+    }
+    // Second: size cap (FIFO — oldest first via sort)
+    if (this.deadLetterCache.size > this.MAX_DEAD_LETTER_CACHE) {
+      const sorted = Array.from(this.deadLetterCache.entries())
+        .sort((a, b) => new Date(a[1].createdAt).getTime() - new Date(b[1].createdAt).getTime());
+      const toDelete = sorted.length - this.MAX_DEAD_LETTER_CACHE;
+      for (let i = 0; i < toDelete; i++) {
+        this.deadLetterCache.delete(sorted[i][0]);
+      }
+    }
+  }
+
+  // M4: Auto-reconcile unmatched dead-letter payments against a case
+  private autoReconcileDeadLetters(recoveryCase: RecoveryCase): void {
+    for (const [id, payment] of this.deadLetterCache) {
+      if (payment.matched) continue;
+      const matches =
+        (payment.paymentId && payment.paymentId === recoveryCase.sourceEvent.paymentId) ||
+        (payment.paymentOrderId && payment.paymentOrderId === recoveryCase.sourceEvent.orderId) ||
+        (payment.paymentLinkId && recoveryCase.outcome?.paymentLinkId === payment.paymentLinkId);
+      if (matches && recoveryCase.status !== 'RECOVERED' && recoveryCase.status !== 'DISMISSED') {
+        this.matchDeadLetterPayment(id, recoveryCase.caseId);
+        this.broadcast('dead-letter-auto-matched', { paymentId: id, caseId: recoveryCase.caseId });
+      }
+    }
+  }
+
+  // M1: Index-based case lookup by paymentId (O(1))
+  public getCaseByPaymentId(paymentId: string): RecoveryCase | undefined {
+    const caseId = this.paymentIdIndex.get(paymentId);
+    return caseId ? this.casesCache.get(caseId) : undefined;
+  }
+
+  // M1: Index-based case lookup by orderId (O(1))
+  public getCaseByOrderId(orderId: string): RecoveryCase | undefined {
+    const caseId = this.orderIdIndex.get(orderId);
+    return caseId ? this.casesCache.get(caseId) : undefined;
+  }
+
+  // M1: Index-based case lookup by paymentLinkId (O(1))
+  public getCaseByPaymentLinkId(paymentLinkId: string): RecoveryCase | undefined {
+    const caseId = this.paymentLinkIdIndex.get(paymentLinkId);
+    return caseId ? this.casesCache.get(caseId) : undefined;
   }
 
   // =========================================================================

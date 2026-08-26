@@ -16,13 +16,13 @@ import {
   AlertTriangle,
   Sparkles
 } from 'lucide-react';
-import { RecoveryCase } from '../types';
+import { RecoveryCase, ChannelType } from '../types';
 
 interface CaseDetailModalProps {
   caseItem: RecoveryCase;
   onClose: () => void;
   onRunAgent: (caseId: string) => void;
-  onHumanAction: (caseId: string, action: 'APPROVE' | 'DISMISS', discountPct?: number, notes?: string) => Promise<void>;
+  onHumanAction: (caseId: string, action: 'APPROVE' | 'DISMISS', discountPct?: number, notes?: string, overrideChannel?: ChannelType) => Promise<void>;
   isRunningAgent: boolean;
 }
 
@@ -35,11 +35,12 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
 }) => {
   const [overrideDiscount, setOverrideDiscount] = useState<number>(caseItem.strategy?.offeredDiscountPct || 5);
   const [notes, setNotes] = useState('');
+  const [overrideChannel, setOverrideChannel] = useState<ChannelType>(caseItem.strategy?.targetChannel || 'WHATSAPP');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleApprove = async () => {
     setIsSubmitting(true);
-    await onHumanAction(caseItem.caseId, 'APPROVE', overrideDiscount, notes);
+    await onHumanAction(caseItem.caseId, 'APPROVE', overrideDiscount, notes, overrideChannel);
     setIsSubmitting(false);
     onClose();
   };
@@ -301,6 +302,22 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
                   onChange={(e) => setOverrideDiscount(Number(e.target.value))}
                   className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Delivery Channel
+                </label>
+                <select
+                  value={overrideChannel}
+                  onChange={(e) => setOverrideChannel(e.target.value as ChannelType)}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 focus:outline-hidden"
+                >
+                  <option value="WHATSAPP">WhatsApp</option>
+                  <option value="SMS">SMS</option>
+                  <option value="EMAIL">Email</option>
+                  <option value="VOICE_CALL">Voice Call</option>
+                </select>
               </div>
 
               <div>

@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { RecoveryCase } from '../types';
+import { RecoveryCase, ChannelType } from '../types';
 
 export interface UseSimulationApiReturn {
   isSimulating: boolean;
@@ -24,7 +24,7 @@ export interface UseSimulationApiReturn {
   simulateBankStatus: (bankCode: string, successRate: number, status: 'HEALTHY' | 'DEGRADED' | 'OUTAGE') => Promise<void>;
   runAgent: (caseId: string) => Promise<void>;
   sendNegotiation: (caseId: string, intent: string, payload: any) => Promise<void>;
-  humanAction: (caseId: string, action: 'APPROVE' | 'DISMISS', discountPct?: number, notes?: string) => Promise<void>;
+  humanAction: (caseId: string, action: 'APPROVE' | 'DISMISS', discountPct?: number, notes?: string, overrideChannel?: ChannelType) => Promise<void>;
 }
 
 export function useSimulationApi(
@@ -242,12 +242,12 @@ export function useSimulationApi(
     }
   }, [refreshData, cases, setSelectedCase]);
 
-  const humanAction = useCallback(async (caseId: string, action: 'APPROVE' | 'DISMISS', discountPct?: number, notes?: string) => {
+  const humanAction = useCallback(async (caseId: string, action: 'APPROVE' | 'DISMISS', discountPct?: number, notes?: string, overrideChannel?: ChannelType) => {
     try {
       await fetch(`/api/cases/${caseId}/human-decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, overrideDiscountPct: discountPct, notes })
+        body: JSON.stringify({ action, overrideDiscountPct: discountPct, notes, overrideChannel })
       });
       await refreshData();
     } catch (err) {
