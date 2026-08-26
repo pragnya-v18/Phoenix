@@ -9,7 +9,7 @@ import {
   orderBy
 } from 'firebase/firestore';
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseConfig from '../../config/firebase-applet-config.json';
 
 // Initialize Firebase App instance safely
 export const firebaseApp = getApps().length === 0 

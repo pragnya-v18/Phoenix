@@ -30,7 +30,7 @@ import { generateSeedData } from '../seed/seed-data.js';
 // Read config safely
 let firebaseConfig: any = {};
 try {
-  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  const configPath = path.join(process.cwd(), 'config', 'firebase-applet-config.json');
   if (fs.existsSync(configPath)) {
     const raw = fs.readFileSync(configPath, 'utf8');
     firebaseConfig = JSON.parse(raw);
