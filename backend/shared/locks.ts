@@ -3,7 +3,7 @@
  */
 
 import { RecoveryCase, AuditLogEntry } from '../../src/types/index.js';
-import { db } from '../db.js';
+import { db } from '../repositories/db.js';
 
 // Per-case pipeline lock to prevent duplicate concurrent executions
 const pipelineLocks = new Map<string, Promise<{ updatedCase: RecoveryCase; traces: any[] }>>();

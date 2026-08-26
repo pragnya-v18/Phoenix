@@ -22,10 +22,10 @@ import {
   ACPMessage,
   CaseStatus,
   DeadLetterPayment
-} from '../src/types/index.js';
-import { pipelineJobQueue } from './job-queue.js';
-import { computeKPIs } from './kpi-engine.js';
-import { generateSeedData } from './seed-data.js';
+} from '../../src/types/index.js';
+import { pipelineJobQueue } from '../queues/job-queue.js';
+import { computeKPIs } from '../services/kpi-engine.js';
+import { generateSeedData } from '../seed/seed-data.js';
 
 // Read config safely
 let firebaseConfig: any = {};

@@ -4,11 +4,11 @@
  * Each handler processes a specific Razorpay webhook event type.
  */
 
-import { db } from './db.js';
-import { pipelineJobQueue } from './job-queue.js';
-import { IdempotencyService } from './idempotency.js';
-import { FinancialAccountingEngine } from './financials.js';
-import { RecoveryCase, PaymentMethod, ChannelType } from '../src/types/index.js';
+import { db } from '../repositories/db.js';
+import { pipelineJobQueue } from '../queues/job-queue.js';
+import { IdempotencyService } from '../services/idempotency.js';
+import { FinancialAccountingEngine } from '../services/financials.js';
+import { RecoveryCase, PaymentMethod, ChannelType } from '../../src/types/index.js';
 
 export interface WebhookResult {
   status: string;

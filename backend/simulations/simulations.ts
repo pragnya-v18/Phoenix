@@ -3,9 +3,9 @@
  * Extracted from razorpay.ts for better code organization
  */
 
-import { db } from './db.js';
-import { pipelineJobQueue } from './job-queue.js';
-import { RecoveryCase, PaymentMethod, ChannelType, CheckoutStage, CheckoutProfile, InvoiceDPD } from '../src/types/index.js';
+import { db } from '../repositories/db.js';
+import { pipelineJobQueue } from '../queues/job-queue.js';
+import { RecoveryCase, PaymentMethod, ChannelType, CheckoutStage, CheckoutProfile, InvoiceDPD } from '../../src/types/index.js';
 
 export class SimulationService {
   /**

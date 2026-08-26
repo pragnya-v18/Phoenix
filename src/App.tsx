@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
-import { Sidebar } from './components/Sidebar';
-import { TopBar } from './components/TopBar';
+import { Sidebar } from './components/layout/Sidebar';
+import { TopBar } from './components/layout/TopBar';
 import { ExecutiveDashboard } from './components/ExecutiveDashboard';
 import { RecoveryCasesView } from './components/RecoveryCasesView';
 import { AgentMonitorView } from './components/AgentMonitorView';
 import { AcpSandboxView } from './components/AcpSandboxView';
 import { BankHealthRadar } from './components/BankHealthRadar';
 import { AuditTrailView } from './components/AuditTrailView';
-import { CaseDetailModal } from './components/CaseDetailModal';
+import { CaseDetailModal } from './components/modals/CaseDetailModal';
 import { RecoveryCase } from './types';
 import { useDataPolling } from './hooks/useDataPolling';
 import { useSimulationApi } from './hooks/useSimulationApi';

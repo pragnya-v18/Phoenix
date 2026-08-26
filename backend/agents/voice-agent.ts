@@ -4,8 +4,8 @@
  * Extracted from AgentSupervisor for modularity.
  */
 
-import { db } from './db.js';
-import { safePersistCase, safeAuditLog } from './shared/index.js';
+import { db } from '../repositories/db.js';
+import { safePersistCase, safeAuditLog } from '../shared/index.js';
 import {
   RecoveryCase,
   PaymentMethod,
@@ -15,7 +15,7 @@ import {
   VoiceLanguageVariant,
   VoiceToneVariant,
   VoiceScriptSegment
-} from '../src/types/index.js';
+} from '../../src/types/index.js';
 
 export class VoiceAgentService {
   /**

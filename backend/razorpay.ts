@@ -12,8 +12,8 @@
  */
 
 import crypto from 'crypto';
-import { db } from './db.js';
-import { IdempotencyService } from './idempotency.js';
+import { db } from './repositories/db.js';
+import { IdempotencyService } from './services/idempotency.js';
 import { RecoveryCase, ChannelType } from '../src/types/index.js';
 import {
   handlePaymentFailed,
@@ -23,7 +23,7 @@ import {
   handlePaymentLinkExpired,
   handleRefundEvent,
   WebhookResult
-} from './webhook-handlers.js';
+} from './webhooks/webhook-handlers.js';
 
 export interface RazorpayPaymentLinkResponse {
   id: string;

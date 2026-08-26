@@ -16,7 +16,7 @@ import {
   AlertTriangle,
   Sparkles
 } from 'lucide-react';
-import { RecoveryCase, ChannelType } from '../types';
+import { RecoveryCase, ChannelType } from '../../types';
 
 interface CaseDetailModalProps {
   caseItem: RecoveryCase;

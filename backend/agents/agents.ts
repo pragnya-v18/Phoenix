@@ -12,10 +12,10 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { db } from './db.js';
-import { RazorpayService } from './razorpay.js';
-import { IdempotencyService } from './idempotency.js';
-import { FinancialAccountingEngine } from './financials.js';
+import { db } from '../repositories/db.js';
+import { RazorpayService } from '../razorpay.js';
+import { IdempotencyService } from '../services/idempotency.js';
+import { FinancialAccountingEngine } from '../services/financials.js';
 import {
   RecoveryCase,
   AuditLogEntry,
@@ -30,7 +30,7 @@ import {
   AntiAbusePolicyConfig,
   CheckoutStage,
   InvoiceDPD
-} from '../src/types/index.js';
+} from '../../src/types/index.js';
 import {
   getGeminiClient,
   parseGeminiJson,
@@ -43,7 +43,7 @@ import {
   safeAuditLog,
   getPipelineLocks,
   getCaseLocks
-} from './shared/index.js';
+} from '../shared/index.js';
 
 
 

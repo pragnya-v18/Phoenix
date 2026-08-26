@@ -1,10 +1,10 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
-import { apiRouter } from './backend/routes.js';
-import { pipelineJobQueue } from './backend/job-queue.js';
-import { AgentSupervisor } from './backend/agents.js';
-import { db } from './backend/db.js';
-import { PipelineJob } from './backend/job-queue.js';
+import { apiRouter } from './backend/routes/routes.js';
+import { pipelineJobQueue } from './backend/queues/job-queue.js';
+import { AgentSupervisor } from './backend/agents/agents.js';
+import { db } from './backend/repositories/db.js';
+import { PipelineJob } from './backend/queues/job-queue.js';
 
 async function startServer() {
   const app = express();

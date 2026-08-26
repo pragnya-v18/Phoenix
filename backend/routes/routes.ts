@@ -4,15 +4,15 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { db } from './db.js';
-import { AgentSupervisor } from './agents.js';
-import { waitForPipeline, acquireCaseLock } from './shared/index.js';
-import { RazorpayService } from './razorpay.js';
-import { SimulationService } from './simulations.js';
-import { VoiceAgentService } from './voice-agent.js';
-import { FinancialAccountingEngine } from './financials.js';
-import { pipelineJobQueue } from './job-queue.js';
-import { RecoveryCase, CaseStatus } from '../src/types/index.js';
+import { db } from '../repositories/db.js';
+import { AgentSupervisor } from '../agents/agents.js';
+import { waitForPipeline, acquireCaseLock } from '../shared/index.js';
+import { RazorpayService } from '../razorpay.js';
+import { SimulationService } from '../simulations/simulations.js';
+import { VoiceAgentService } from '../agents/voice-agent.js';
+import { FinancialAccountingEngine } from '../services/financials.js';
+import { pipelineJobQueue } from '../queues/job-queue.js';
+import { RecoveryCase, CaseStatus } from '../../src/types/index.js';
 
 export const apiRouter = Router();
 

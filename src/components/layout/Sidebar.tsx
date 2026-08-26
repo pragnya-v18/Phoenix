@@ -18,8 +18,8 @@ import {
   Server,
   BellRing
 } from 'lucide-react';
-import { ExecutiveKPIs, BankHealthMetric } from '../types';
-import { auth, googleAuthProvider } from '../lib/firebase';
+import { ExecutiveKPIs, BankHealthMetric } from '../../types';
+import { auth, googleAuthProvider } from '../../lib/firebase';
 import { signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
 
 interface SidebarProps {

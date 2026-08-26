@@ -3,7 +3,7 @@
  */
 
 import { RecoveryCase, AuditLogEntry } from '../../src/types/index.js';
-import { db } from '../db.js';
+import { db } from '../repositories/db.js';
 
 // Terminal statuses — pipeline must not reprocess cases in these states
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['RECOVERED', 'DISMISSED']);

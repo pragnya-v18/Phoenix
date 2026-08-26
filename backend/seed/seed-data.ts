@@ -5,7 +5,7 @@
  */
 
 import crypto from 'crypto';
-import { RecoveryCase, AuditLogEntry, BankHealthMetric } from '../src/types/index.js';
+import { RecoveryCase, AuditLogEntry, BankHealthMetric } from '../../src/types/index.js';
 
 export interface SeedData {
   bankHealth: BankHealthMetric[];

@@ -11,7 +11,7 @@ import {
   Zap,
   LucideIcon
 } from 'lucide-react';
-import { ExecutiveKPIs, BankHealthMetric } from '../types';
+import { ExecutiveKPIs, BankHealthMetric } from '../../types';
 
 interface SimConfig {
   label: string;

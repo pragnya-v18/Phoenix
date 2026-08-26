@@ -19,7 +19,7 @@ import {
   VoiceLanguageVariant,
   VoiceCallOutcome,
   ChannelType
-} from '../src/types/index.js';
+} from '../../src/types/index.js';
 import { FinancialAccountingEngine } from './financials.js';
 
 const netRecoveredAmount = (c: RecoveryCase): number => {
