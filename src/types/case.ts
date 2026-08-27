@@ -81,6 +81,7 @@ export interface DiagnosisRecord {
   bankSwitchHealthIndex: number;
   recommendedRailSwitch: PaymentMethod | 'NONE';
   diagnosedAt: string;
+  tokensUsed: number;
 }
 
 export interface StrategyRecord {
@@ -97,6 +98,7 @@ export interface StrategyRecord {
   confidenceScore?: number;
   antiAbuseEnforced?: boolean;
   antiAbuseReason?: string;
+  tokensUsed: number;
 }
 
 export interface RecoveryCase {

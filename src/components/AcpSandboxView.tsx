@@ -49,10 +49,10 @@ export const AcpSandboxView: React.FC<AcpSandboxViewProps> = ({
         <div>
           <h2 className="text-sm font-bold tracking-tight text-slate-900 uppercase flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-indigo-600" />
-            ACP 2.0 Protocol Monitor
+            ACP 2.0 Protocol Monitor (Demo)
           </h2>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Agent-to-Agent Commerce Protocol · Merchant ↔ Customer Wallet dialogue
+            Agent-to-Agent Commerce Protocol · Architectural Demo
           </p>
         </div>
         {cases.length > 0 && (

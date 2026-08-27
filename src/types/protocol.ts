@@ -90,4 +90,5 @@ export interface ComplianceEvaluation {
   evaluatedAt: string;
   reasoningSummary?: string;
   confidenceScore?: number;
+  tokensUsed: number;
 }

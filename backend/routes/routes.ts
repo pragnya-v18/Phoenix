@@ -620,9 +620,9 @@ apiRouter.post(['/acp/negotiate', '/acp/negotiate/:caseId'], async (req: Request
       agentName: 'Negotiation Agent',
       action: 'ACP_A2A_ROUND_TRIP',
       rationale: `Received ${customerAgentIntent}. Responded with ${replyIntent}. Payload: ${JSON.stringify(replyPayload)}`,
-      model: 'gemini-3.7-flash',
+      model: 'deterministic-rules',
       latencyMs: 310,
-      tokensUsed: 420
+      tokensUsed: 0
     });
 
     res.json({

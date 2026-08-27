@@ -7,10 +7,12 @@ import {
   Hash,
   ChevronDown,
   ChevronRight,
-  FileText
+  FileText,
+  Download
 } from 'lucide-react';
 import { AuditLogEntry } from '../types';
 import { AuditProofCard, TrustBadge } from './ui';
+import { exportToCSV } from '../utils/csvExport';
 
 interface AuditTrailViewProps {
   audits: AuditLogEntry[];
@@ -34,6 +36,22 @@ export const AuditTrailView: React.FC<AuditTrailViewProps> = ({ audits }) => {
     return acc;
   }, {});
 
+  const handleExportCSV = () => {
+    const headers = ['Case ID', 'Agent', 'Action', 'Rationale', 'Model', 'Latency (ms)', 'Tokens', 'Signature', 'Timestamp'];
+    const rows = filtered.map(log => [
+      log.caseId,
+      log.agentName,
+      log.action,
+      log.rationale,
+      log.model,
+      log.latencyMs,
+      log.tokensUsed,
+      log.signatureHash,
+      new Date(log.timestamp).toISOString()
+    ]);
+    exportToCSV(headers, rows, `recoverflow-audit-${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -48,6 +66,13 @@ export const AuditTrailView: React.FC<AuditTrailViewProps> = ({ audits }) => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportCSV}
+            className="flex items-center gap-1.5 text-[10px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200/60 transition-colors"
+          >
+            <Download className="w-3 h-3" />
+            Export CSV
+          </button>
           <span className="flex items-center gap-1 text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
             <Lock className="w-3 h-3" />
             SHA-256 signed

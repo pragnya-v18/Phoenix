@@ -2,7 +2,7 @@
  * RecoverFlow AI - LangGraph Multi-Agent Architecture
  * Razorpay Buildathon 2026 - Track 03 (AI Revenue Recovery)
  * 
- * Genuine Multi-Agent System powered by Gemini 3.7 Flash with Hard Deterministic Safeguards:
+ * Genuine Multi-Agent System powered by Gemini 2.0 Flash with Hard Deterministic Safeguards:
  * 1. Detection Agent: Gemini risk classification, urgency, flight-risk & revenue-at-risk scoring
  * 2. Diagnosis Agent: Gemini root-cause forensics + live Indian bank switch health telemetry
  * 3. Strategy Agent: Gemini Expected-Value (EV) recovery optimization & dynamic incentive planning
@@ -293,7 +293,7 @@ export class AgentSupervisor {
       status: 'COMPLETED',
       reasoning: diagnosis.rootCauseDetail,
       latencyMs: Date.now() - t1,
-      tokensUsed: 380,
+      tokensUsed: diagnosis.tokensUsed,
       outputSummary: diagnosis,
       timestamp: new Date().toISOString()
     });
@@ -303,9 +303,9 @@ export class AgentSupervisor {
       agentName: 'Diagnosis Agent',
       action: 'ROOT_CAUSE_FORENSICS',
       rationale: `${diagnosis.rootCauseDetail} (Confidence: ${(diagnosis.confidenceScore * 100).toFixed(0)}%, Bank Switch Health: ${diagnosis.bankSwitchHealthIndex}%)`,
-      model: 'gemini-3.7-flash',
+      model: 'gemini-2.0-flash',
       latencyMs: Date.now() - t1,
-      tokensUsed: 380
+      tokensUsed: diagnosis.tokensUsed
     });
 
     // =============================================================
@@ -328,7 +328,7 @@ export class AgentSupervisor {
       status: 'COMPLETED',
       reasoning: strategy.reasoning,
       latencyMs: Date.now() - t2,
-      tokensUsed: 490,
+      tokensUsed: strategy.tokensUsed,
       outputSummary: strategy,
       timestamp: new Date().toISOString()
     });
@@ -338,9 +338,9 @@ export class AgentSupervisor {
       agentName: 'Strategy Agent',
       action: 'OPTIMIZE_RECOVERY_STRATEGY',
       rationale: strategy.reasoning,
-      model: 'gemini-3.7-flash',
+      model: 'gemini-2.0-flash',
       latencyMs: Date.now() - t2,
-      tokensUsed: 490
+      tokensUsed: strategy.tokensUsed
     });
 
     // =============================================================
@@ -360,7 +360,7 @@ export class AgentSupervisor {
         status: 'HALTED',
         reasoning: `Circuit breaker tripped: ${compliance.violations.join('; ')}. ${compliance.reasoningSummary || ''} State checkpointed. Routing to Human-In-The-Loop Clearance Queue.`,
         latencyMs: Date.now() - t3,
-        tokensUsed: 220,
+        tokensUsed: compliance.tokensUsed,
         outputSummary: compliance,
         timestamp: new Date().toISOString()
       });
@@ -370,7 +370,7 @@ export class AgentSupervisor {
         agentName: 'Compliance Agent',
         action: 'HALT_FOR_HUMAN_APPROVAL',
         rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
-        model: 'gemini-3.7-flash + deterministic-guardrails',
+        model: 'gemini-2.0-flash',
         latencyMs: Date.now() - t3,
         tokensUsed: 220
       });
@@ -384,7 +384,7 @@ export class AgentSupervisor {
       status: 'COMPLETED',
       reasoning: `All safety checks passed (${compliance.rulesPassed.join(', ')}). ${compliance.reasoningSummary || ''} Approved for autonomous execution.`,
       latencyMs: Date.now() - t3,
-      tokensUsed: 220,
+      tokensUsed: compliance.tokensUsed,
       outputSummary: compliance,
       timestamp: new Date().toISOString()
     });
@@ -519,7 +519,7 @@ export class AgentSupervisor {
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the Chief Risk Detection Agent for RecoverFlow AI.
 Analyze this newly intercepted payment failure event and classify the merchant revenue risk.
 Input Data:
@@ -564,8 +564,8 @@ Return ONLY valid JSON matching this schema:
             urgencyScore: parsed.urgencyScore || 75,
             reasoning: parsed.reasoning || `Classified as ${finalRiskTier} risk by Gemini based on CLV and failure telemetry.`,
             confidenceScore: parsed.confidenceScore || 0.94,
-            modelUsed: 'gemini-3.7-flash',
-            tokensUsed: 190
+            modelUsed: 'gemini-2.0-flash',
+            tokensUsed: response.usageMetadata?.totalTokenCount ?? 0
           };
         }
       } catch (err) {
@@ -602,7 +602,7 @@ Return ONLY valid JSON matching this schema:
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the Chief Diagnostic Forensics Agent for RecoverFlow AI.
 Analyze this payment failure and return pure JSON.
 Telemetry:
@@ -648,7 +648,8 @@ Respond with JSON format:
             bankCode,
             bankSwitchHealthIndex: healthIndex,
             recommendedRailSwitch: parsed.recommendedRailSwitch || 'CARD',
-            diagnosedAt: new Date().toISOString()
+            diagnosedAt: new Date().toISOString(),
+            tokensUsed: response.usageMetadata?.totalTokenCount ?? 0
           };
         }
       } catch (err) {
@@ -666,7 +667,8 @@ Respond with JSON format:
         bankCode,
         bankSwitchHealthIndex: healthIndex,
         recommendedRailSwitch: 'CARD',
-        diagnosedAt: new Date().toISOString()
+        diagnosedAt: new Date().toISOString(),
+        tokensUsed: 0
       };
     }
 
@@ -679,7 +681,8 @@ Respond with JSON format:
         bankCode,
         bankSwitchHealthIndex: healthIndex,
         recommendedRailSwitch: 'CARD',
-        diagnosedAt: new Date().toISOString()
+        diagnosedAt: new Date().toISOString(),
+        tokensUsed: 0
       };
     }
 
@@ -692,7 +695,8 @@ Respond with JSON format:
         bankCode,
         bankSwitchHealthIndex: healthIndex,
         recommendedRailSwitch: 'CARD',
-        diagnosedAt: new Date().toISOString()
+        diagnosedAt: new Date().toISOString(),
+        tokensUsed: 0
       };
     }
 
@@ -704,7 +708,8 @@ Respond with JSON format:
       bankCode,
       bankSwitchHealthIndex: healthIndex,
       recommendedRailSwitch: 'NONE',
-      diagnosedAt: new Date().toISOString()
+      diagnosedAt: new Date().toISOString(),
+      tokensUsed: 0
     };
   }
 
@@ -738,7 +743,7 @@ Respond with JSON format:
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the Chief Economic Strategy & Revenue Optimizer Agent for RecoverFlow AI.
 Formulate the optimal recovery plan to maximize Expected Recovery Revenue (EV).
 Parameters:
@@ -805,7 +810,8 @@ Return ONLY JSON:
             confidenceScore: parsed.confidenceScore || 0.93,
             antiAbuseEnforced,
             antiAbuseReason,
-            scheduledExecutionAt: new Date().toISOString()
+            scheduledExecutionAt: new Date().toISOString(),
+            tokensUsed: response.usageMetadata?.totalTokenCount ?? 0
           };
         }
       } catch (err) {
@@ -849,7 +855,8 @@ Return ONLY JSON:
       confidenceScore: 0.90,
       antiAbuseEnforced,
       antiAbuseReason,
-      scheduledExecutionAt: new Date().toISOString()
+      scheduledExecutionAt: new Date().toISOString(),
+      tokensUsed: 0
     };
   }
 
@@ -864,6 +871,7 @@ Return ONLY JSON:
     const violations: string[] = [];
     let requiresHumanApproval = false;
     let geminiReasoning = '';
+    let geminiTokens = 0;
 
     if (strategy.antiAbuseEnforced) {
       rulesPassed.push('ANTI_ABUSE_ZERO_DISCOUNT_RULE_ENFORCED');
@@ -874,7 +882,7 @@ Return ONLY JSON:
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the Chief Regulatory Compliance & Risk Officer for RecoverFlow AI.
 Evaluate this recovery proposal for regulatory guidelines (RBI dunning guidelines, TRAI messaging regulations, customer brand sentiment risk, and merchant margin safety).
 Proposal:
@@ -905,6 +913,7 @@ Return ONLY JSON:
 
         if (parsed) {
           geminiReasoning = parsed.regulatoryAssessment || parsed.complianceNotes || '';
+          geminiTokens = response.usageMetadata?.totalTokenCount ?? 0;
           if (parsed.marginSafetyPassed) {
             rulesPassed.push('AI_MARGIN_SAFETY_PASSED');
           }
@@ -943,7 +952,8 @@ Return ONLY JSON:
       requiresHumanApproval,
       reasoningSummary: geminiReasoning || 'Passed deterministic and regulatory compliance rules.',
       confidenceScore: 0.98,
-      evaluatedAt: new Date().toISOString()
+      evaluatedAt: new Date().toISOString(),
+      tokensUsed: geminiTokens
     };
   }
 
@@ -1010,7 +1020,7 @@ Return ONLY JSON:
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the Autonomous Customer Recovery Communications Agent for RecoverFlow AI.
 Generate a high-converting, courteous, personalized notification for the customer.
 Context:
@@ -1040,8 +1050,8 @@ Return ONLY JSON:
           return {
             messageBody: parsed.messageBody,
             tone: parsed.tone || 'POLITE_CONCIERGE',
-            modelUsed: 'gemini-3.7-flash',
-            tokensUsed: 160,
+            modelUsed: 'gemini-2.0-flash',
+            tokensUsed: response.usageMetadata?.totalTokenCount ?? 0,
             whatsAppInteractivePayload: interactivePayload
           };
         }
@@ -1101,7 +1111,7 @@ Return ONLY JSON:
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the Revenue Attribution & Post-Recovery Intelligence Agent for RecoverFlow AI.
 Analyze this recovered transaction and generate a 1-sentence executive business insight for the merchant.
 Details:
@@ -1133,8 +1143,8 @@ Return ONLY JSON:
           return {
             outcome: baseOutcome,
             insights: parsed.businessInsights,
-            modelUsed: 'gemini-3.7-flash',
-            tokensUsed: 140
+            modelUsed: 'gemini-2.0-flash',
+            tokensUsed: response.usageMetadata?.totalTokenCount ?? 0
           };
         }
       } catch (err) {
@@ -1293,7 +1303,7 @@ Return ONLY JSON:
         status: 'HALTED',
         reasoning: `Circuit breaker tripped: ${compliance.violations.join('; ')}. Routing to Human-In-The-Loop Clearance Queue.`,
         latencyMs: Date.now() - t3,
-        tokensUsed: 220,
+        tokensUsed: compliance.tokensUsed,
         outputSummary: compliance,
         timestamp: new Date().toISOString()
       });
@@ -1303,7 +1313,7 @@ Return ONLY JSON:
         agentName: 'Compliance Agent',
         action: 'CHECKOUT_HALT_FOR_HUMAN_APPROVAL',
         rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
-        model: 'gemini-3.7-flash + deterministic-guardrails',
+        model: 'gemini-2.0-flash',
         latencyMs: Date.now() - t3,
         tokensUsed: 220
       });
@@ -1317,7 +1327,7 @@ Return ONLY JSON:
       status: 'COMPLETED',
       reasoning: `All checkout recovery safety checks passed.`,
       latencyMs: Date.now() - t3,
-      tokensUsed: 220,
+      tokensUsed: compliance.tokensUsed,
       outputSummary: compliance,
       timestamp: new Date().toISOString()
     });
@@ -1565,7 +1575,8 @@ Return ONLY JSON:
       bankCode: recoveryCase.sourceEvent.bankCode || 'HDFC',
       bankSwitchHealthIndex: 94.0,
       recommendedRailSwitch: recommendedRail,
-      diagnosedAt: new Date().toISOString()
+      diagnosedAt: new Date().toISOString(),
+      tokensUsed: 0
     };
   }
 
@@ -1634,7 +1645,8 @@ Return ONLY JSON:
       reasoning,
       expectedRecoveryProbability: adjustedProb,
       confidenceScore: 0.91,
-      scheduledExecutionAt: new Date().toISOString()
+      scheduledExecutionAt: new Date().toISOString(),
+      tokensUsed: 0
     };
   }
 
@@ -1702,7 +1714,7 @@ Return ONLY JSON:
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the Checkout Recovery Communications Agent for RecoverFlow AI.
 Generate a personalized, cart-specific recovery message for an abandoned checkout.
 Context:
@@ -1734,8 +1746,8 @@ Return ONLY JSON:
           return {
             messageBody: parsed.messageBody,
             tone: parsed.tone || 'FRIENDLY_HELPFUL',
-            modelUsed: 'gemini-3.7-flash',
-            tokensUsed: 160,
+            modelUsed: 'gemini-2.0-flash',
+            tokensUsed: response.usageMetadata?.totalTokenCount ?? 0,
             whatsAppInteractivePayload: interactivePayload
           };
         }
@@ -1895,7 +1907,7 @@ Return ONLY JSON:
         status: 'HALTED',
         reasoning: `Circuit breaker tripped: ${compliance.violations.join('; ')}. Routing to Human-In-The-Loop Clearance Queue.`,
         latencyMs: Date.now() - t3,
-        tokensUsed: 220,
+        tokensUsed: compliance.tokensUsed,
         outputSummary: compliance,
         timestamp: new Date().toISOString()
       });
@@ -1905,7 +1917,7 @@ Return ONLY JSON:
         agentName: 'Compliance Agent',
         action: 'INVOICE_HALT_FOR_HUMAN_APPROVAL',
         rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
-        model: 'gemini-3.7-flash + deterministic-guardrails',
+        model: 'gemini-2.0-flash',
         latencyMs: Date.now() - t3,
         tokensUsed: 220
       });
@@ -1919,7 +1931,7 @@ Return ONLY JSON:
       status: 'COMPLETED',
       reasoning: `All B2B receivables compliance checks passed.`,
       latencyMs: Date.now() - t3,
-      tokensUsed: 220,
+      tokensUsed: compliance.tokensUsed,
       outputSummary: compliance,
       timestamp: new Date().toISOString()
     });
@@ -2140,7 +2152,8 @@ Return ONLY JSON:
       bankCode: recoveryCase.sourceEvent.bankCode || 'HDFC',
       bankSwitchHealthIndex: 95.0,
       recommendedRailSwitch: 'NETBANKING',
-      diagnosedAt: new Date().toISOString()
+      diagnosedAt: new Date().toISOString(),
+      tokensUsed: 0
     };
   }
 
@@ -2205,7 +2218,8 @@ Return ONLY JSON:
       reasoning,
       expectedRecoveryProbability: adjustedProb,
       confidenceScore: 0.91,
-      scheduledExecutionAt: new Date().toISOString()
+      scheduledExecutionAt: new Date().toISOString(),
+      tokensUsed: 0
     };
   }
 
@@ -2273,7 +2287,7 @@ Return ONLY JSON:
       try {
         const response = await callGeminiWithTimeout(async () => {
           return await gemini.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-2.0-flash',
             contents: `You are the B2B Receivables Recovery Communications Agent for RecoverFlow AI.
 Generate a professional, courteous B2B payment reminder email/message.
 Context:
@@ -2305,8 +2319,8 @@ Return ONLY JSON:
           return {
             messageBody: parsed.messageBody,
             tone: parsed.tone || 'PROFESSIONAL_COURTEOUS',
-            modelUsed: 'gemini-3.7-flash',
-            tokensUsed: 170,
+            modelUsed: 'gemini-2.0-flash',
+            tokensUsed: response.usageMetadata?.totalTokenCount ?? 0,
             whatsAppInteractivePayload: interactivePayload
           };
         }

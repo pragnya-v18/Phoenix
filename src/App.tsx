@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
@@ -9,9 +9,11 @@ import { AcpSandboxView } from './components/AcpSandboxView';
 import { BankHealthRadar } from './components/BankHealthRadar';
 import { AuditTrailView } from './components/AuditTrailView';
 import { CaseDetailModal } from './components/modals/CaseDetailModal';
+import { DemoWalkthrough } from './components/DemoWalkthrough';
 import { RecoveryCase } from './types';
 import { useDataPolling } from './hooks/useDataPolling';
 import { useSimulationApi } from './hooks/useSimulationApi';
+import { useDemoWalkthrough } from './hooks/useDemoWalkthrough';
 import { ShieldCheck } from 'lucide-react';
 
 export function App() {
@@ -32,6 +34,14 @@ export function App() {
     setSelectedCase,
     dataPolling.cases
   );
+
+  const demo = useDemoWalkthrough(simApi.simulateScenario, setActiveTab);
+
+  useEffect(() => {
+    const handler = () => demo.startDemo();
+    window.addEventListener('recoverflow:start-demo', handler);
+    return () => window.removeEventListener('recoverflow:start-demo', handler);
+  }, [demo.startDemo]);
 
   if (dataPolling.isLoading && dataPolling.cases.length === 0) {
     return (
@@ -180,6 +190,16 @@ export function App() {
           isRunningAgent={simApi.isRunningAgent}
         />
       )}
+
+      {/* Demo Walkthrough */}
+      <DemoWalkthrough
+        isRunning={demo.isRunning}
+        currentStep={demo.currentStep}
+        completedSteps={demo.completedSteps}
+        steps={demo.steps}
+        onStart={demo.startDemo}
+        onCancel={demo.cancelDemo}
+      />
     </div>
   );
 }

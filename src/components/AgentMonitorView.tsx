@@ -55,7 +55,7 @@ export const AgentMonitorView: React.FC<AgentMonitorViewProps> = ({
       step: '02',
       name: 'Diagnosis Agent',
       role: 'Gateway Error Analysis & Bank Health',
-      model: 'Gemini 3.7 Flash',
+      model: 'Gemini 2.0 Flash',
       status: currentCase?.diagnosis ? 'COMPLETED' : 'IDLE',
       latency: '142ms',
       details: currentCase?.diagnosis 
@@ -67,7 +67,7 @@ export const AgentMonitorView: React.FC<AgentMonitorViewProps> = ({
       step: '03',
       name: 'Strategy Optimizer',
       role: 'Expected-Value Maximization',
-      model: 'Gemini 3.7 Flash',
+      model: 'Gemini 2.0 Flash',
       status: currentCase?.strategy ? 'COMPLETED' : 'IDLE',
       latency: '188ms',
       details: currentCase?.strategy 
@@ -77,9 +77,9 @@ export const AgentMonitorView: React.FC<AgentMonitorViewProps> = ({
     {
       id: 'negotiation',
       step: '04',
-      name: 'ACP Negotiation',
+      name: 'ACP Negotiation (Demo)',
       role: 'Agent-to-Agent Commerce',
-      model: 'ACP 2.0 Protocol',
+      model: 'Demo — ACP 2.0 Protocol',
       status: currentCase?.acpSession ? 'COMPLETED' : 'IDLE',
       latency: '310ms',
       details: currentCase?.acpSession 

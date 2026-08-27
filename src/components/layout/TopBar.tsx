@@ -9,6 +9,7 @@ import {
   FileText,
   Phone,
   Zap,
+  Play,
   LucideIcon
 } from 'lucide-react';
 import { ExecutiveKPIs, BankHealthMetric } from '../../types';
@@ -80,7 +81,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     dashboard: { title: 'Mission Control', subtitle: 'Recovery lifecycle overview — failure detection to revenue capture' },
     cases: { title: 'Case Intelligence', subtitle: 'Audit intercepted failures, inspect AI reasoning, manage human review' },
     agents: { title: 'Agent Orchestration', subtitle: '7-agent LangGraph pipeline — execution topology and reasoning traces' },
-    acp: { title: 'Protocol Monitor', subtitle: 'Agent-to-agent commerce negotiation and settlement protocol' },
+    acp: { title: 'Protocol Monitor', subtitle: 'Demo: Agent-to-agent commerce negotiation concept' },
     'bank-radar': { title: 'Switch Telemetry', subtitle: 'NPCI UPI and bank switch uptime matrix — outage detection and routing' },
     audits: { title: 'Forensic Timeline', subtitle: 'Cryptographically signed agent decision trail with hash verification' }
   };
@@ -95,7 +96,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       icon: Sparkles,
       iconColor: 'text-indigo-500',
       items: [
-        { label: '1. UPI Daily Limit Exceeded', amount: '₹5,499', amountColor: 'text-emerald-700', amountBg: 'bg-emerald-50', description: 'Autonomous Card switch + 5% incentive via ACP', action: () => onSimulate('UPI_LIMIT') },
+        { label: '1. UPI Daily Limit Exceeded', amount: '₹5,499', amountColor: 'text-emerald-700', amountBg: 'bg-emerald-50', description: '[Demo] Autonomous Card switch + 5% incentive via ACP', action: () => onSimulate('UPI_LIMIT') },
         { label: '2. Issuer Outage (SBI NetBanking)', amount: '₹3,200', amountColor: 'text-amber-700', amountBg: 'bg-amber-50', description: 'Bank radar detection + optimal backoff retry delay', action: () => onSimulate('SBI_DOWNTIME') },
         { label: '3. High-Value B2B SaaS Deal', amount: '₹48,500', amountColor: 'text-rose-700', amountBg: 'bg-rose-50', description: 'Circuit breaker trigger + Human-in-the-Loop review', action: () => onSimulate('HIGH_VALUE_B2B') },
         { label: '4. e-Mandate Expired (Recurring)', amount: '₹1,499', amountColor: 'text-indigo-700', amountBg: 'bg-indigo-50', description: '1-click WhatsApp interactive token renewal', action: () => onSimulate('SUBSCRIPTION_HALT') },
@@ -298,6 +299,18 @@ export const TopBar: React.FC<TopBarProps> = ({
               </>
             )}
           </div>
+
+          {/* Run Demo Button */}
+          <button
+            onClick={() => {
+              // Trigger the demo by dispatching a custom event
+              window.dispatchEvent(new CustomEvent('recoverflow:start-demo'));
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-semibold shadow-xs shadow-emerald-600/20 transition-all"
+          >
+            <Play className="w-3.5 h-3.5" />
+            <span>Run Demo</span>
+          </button>
 
           {/* Alert Notification Bell */}
           <div className="relative">

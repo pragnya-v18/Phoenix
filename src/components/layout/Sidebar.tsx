@@ -79,7 +79,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {
       group: 'Protocols',
       items: [
-        { id: 'acp', label: 'Protocol Monitor', icon: Sparkles, badge: 'ACP', badgeColor: 'bg-violet-500/20 text-violet-300' },
+        { id: 'acp', label: 'Protocol Monitor', icon: Sparkles, badge: 'ACP (Demo)', badgeColor: 'bg-violet-500/20 text-violet-300' },
         { 
           id: 'bank-radar', 
           label: 'Switch Telemetry', 

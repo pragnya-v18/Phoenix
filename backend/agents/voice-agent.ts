@@ -273,7 +273,8 @@ export class VoiceAgentService {
       delayMinutes: 0,
       reasoning: `Voice recovery call initiated for ${eventType} case. Language: ${language}. Tone: ${tone}. Expected outcome based on CLV tier ${baseCase.customer.clvTier}.`,
       expectedRecoveryProbability: outcome === 'PROMISE_TO_PAY' ? 0.90 : 0.45,
-      scheduledExecutionAt: new Date().toISOString()
+      scheduledExecutionAt: new Date().toISOString(),
+      tokensUsed: 0
     };
 
     // Set compliance
@@ -282,7 +283,8 @@ export class VoiceAgentService {
       rulesPassed: ['TRAI_QUIET_HOURS_OK', 'VOICE_CALL_CONSENT_OBTAINED', 'DO_NOT_DISTURB_CLEAR'],
       violations: [],
       requiresHumanApproval: false,
-      evaluatedAt: new Date().toISOString()
+      evaluatedAt: new Date().toISOString(),
+      tokensUsed: 0
     };
 
     // Persist
