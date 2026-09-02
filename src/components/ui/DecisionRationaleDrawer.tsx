@@ -32,7 +32,7 @@ interface RationaleSection {
 export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = ({ caseItem }) => {
   const [expandedSection, setExpandedSection] = useState<string | null>('inputs');
 
-  const sections: RationaleSection[] = [
+  const allSections: RationaleSection[] = [
     {
       id: 'inputs',
       label: 'Inputs Considered',
@@ -75,9 +75,9 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
             <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
               <span className="text-slate-400">Bank Health Index</span>
               <div className={`font-mono font-semibold ${
-                (caseItem.diagnosis?.bankSwitchHealthIndex || 0) >= 80 ? 'text-emerald-700' :
-                (caseItem.diagnosis?.bankSwitchHealthIndex || 0) >= 60 ? 'text-amber-700' : 'text-rose-700'
-              }`}>{caseItem.diagnosis?.bankSwitchHealthIndex || 'N/A'}%</div>
+                (caseItem.diagnosis?.bankSwitchHealthIndex ?? 0) >= 80 ? 'text-emerald-700' :
+                (caseItem.diagnosis?.bankSwitchHealthIndex ?? 0) >= 60 ? 'text-amber-700' : 'text-rose-700'
+              }`}>{caseItem.diagnosis?.bankSwitchHealthIndex ?? 'N/A'}%</div>
             </div>
           </div>
         </div>
@@ -108,11 +108,11 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[10px] font-semibold text-slate-700">Recovery Strategy</span>
               <span className="font-mono text-[11px] font-bold text-violet-700">
-                {caseItem.strategy?.confidenceScore ? `${(caseItem.strategy.confidenceScore * 100).toFixed(0)}%` : (caseItem.strategy ? '78%' : 'N/A')}
+                {caseItem.strategy?.confidenceScore ? `${(caseItem.strategy.confidenceScore * 100).toFixed(0)}%` : (caseItem.strategy ? 'Pending' : 'N/A')}
               </span>
             </div>
             <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
-              <div className="h-full bg-violet-500 rounded-full transition-all" style={{ width: `${((caseItem.strategy?.confidenceScore || 0.78)) * 100}%` }} />
+              <div className="h-full bg-violet-500 rounded-full transition-all" style={{ width: `${(caseItem.strategy?.confidenceScore ?? 0) * 100}%` }} />
             </div>
             <p className="text-[9px] text-slate-500 mt-1">Expected recovery probability based on channel selection, incentive level, and customer segment</p>
           </div>
@@ -122,11 +122,11 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[10px] font-semibold text-slate-700">Overall Pipeline Confidence</span>
               <span className="font-mono text-[11px] font-bold text-emerald-700">
-                {caseItem.diagnosis && caseItem.strategy ? `${((caseItem.diagnosis.confidenceScore * 0.4 + (caseItem.strategy.confidenceScore || 0.78) * 0.6) * 100).toFixed(0)}%` : 'N/A'}
+                {caseItem.diagnosis && caseItem.strategy?.confidenceScore ? `${((caseItem.diagnosis.confidenceScore * 0.4 + caseItem.strategy.confidenceScore * 0.6) * 100).toFixed(0)}%` : 'N/A'}
               </span>
             </div>
             <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
-              <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${(caseItem.diagnosis ? caseItem.diagnosis.confidenceScore * 0.4 + (caseItem.strategy?.confidenceScore || 0.78) * 0.6 : 0) * 100}%` }} />
+              <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${(caseItem.diagnosis ? caseItem.diagnosis.confidenceScore * 0.4 + (caseItem.strategy?.confidenceScore ?? 0) * 0.6 : 0) * 100}%` }} />
             </div>
             <p className="text-[9px] text-slate-500 mt-1">Weighted average: 40% diagnosis + 60% strategy confidence</p>
           </div>
@@ -205,7 +205,7 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
               </div>
               <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
                 <span className="text-slate-400">Expected Recovery Prob</span>
-                <div className="font-bold text-indigo-700">{((caseItem.strategy?.expectedRecoveryProbability || 0.78) * 100).toFixed(0)}%</div>
+                <div className="font-bold text-indigo-700">{caseItem.strategy?.expectedRecoveryProbability != null ? `${(caseItem.strategy.expectedRecoveryProbability * 100).toFixed(0)}%` : 'N/A'}</div>
               </div>
             </div>
           )}
@@ -214,8 +214,8 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
           <div className="bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-200/60">
             <p className="text-[10px] text-indigo-800 leading-relaxed">
               <strong>Optimization Logic:</strong> EV = P(recovery) × Net Amount − (Incentive + MDR + Ops + Friction).
-              The {caseItem.strategy?.offeredDiscountPct || 5}% incentive was selected because it pays for itself at the
-              estimated {((caseItem.strategy?.expectedRecoveryProbability || 0.78) * 100).toFixed(0)}% recovery probability.
+              The {caseItem.strategy?.offeredDiscountPct ?? 5}% incentive was selected because it pays for itself at the
+              estimated {caseItem.strategy?.expectedRecoveryProbability != null ? `${(caseItem.strategy.expectedRecoveryProbability * 100).toFixed(0)}%` : '—'}% recovery probability.
               Channel {caseItem.strategy?.targetChannel || 'WHATSAPP'} was chosen for its {
               caseItem.strategy?.targetChannel === 'WHATSAPP' ? '82% recovery rate and interactive buttons' : 
               caseItem.strategy?.targetChannel === 'ACP_A2A' ? '88% autonomous recovery rate and 42ms latency' : 
@@ -231,13 +231,7 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
       icon: TrendingUp,
       content: (() => {
         const ev = caseItem.strategy?.recoveryEvidence;
-        if (!ev) {
-          return (
-            <div className="text-[10px] text-slate-400 italic p-3 bg-slate-50 rounded-lg border border-slate-200/60">
-              No historical evidence adjustment stamped yet — will appear after ≥3 similar cases have resolved through the feedback loop.
-            </div>
-          );
-        }
+        if (!ev) return null;
         const stamp = ev.influence.replace(/-/g, ' ');
         return (
           <div className="space-y-2">
@@ -393,6 +387,8 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
       )
     }
   ];
+
+  const sections = allSections.filter(s => s.content !== null);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">

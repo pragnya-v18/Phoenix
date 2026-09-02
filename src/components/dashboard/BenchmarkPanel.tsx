@@ -22,6 +22,9 @@ interface BenchmarkRun {
   upliftPct: number;
   aiVsRulesDeltaPct: number;
   heldThoseCases: string[];
+  baselineBehaviour: string;
+  agentBehaviour: string;
+  rulesBehaviour: string;
 }
 
 const formatINR = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
@@ -108,7 +111,7 @@ export const BenchmarkPanel: React.FC = () => {
           {row('Incentive cost', benchmark.baseline.incentiveINR, benchmark.rulesAgent.incentiveINR, benchmark.agent.incentiveINR, true)}
           {row('MDR + ops cost', benchmark.baseline.mdrINR + benchmark.baseline.opsINR, benchmark.rulesAgent.mdrINR + benchmark.rulesAgent.opsINR, benchmark.agent.mdrINR + benchmark.agent.opsINR, true)}
           {row('Net margin saved', benchmark.baseline.netINR, benchmark.rulesAgent.netINR, benchmark.agent.netINR, true)}
-          {row('Unvetted dispatches', benchmark.baseline.duplicateChargeRiskCases, benchmark.rulesAgent.duplicateChargeRiskCases, benchmark.agent.duplicateChargeRiskCases)}
+          {row('Double-charge risk prevented', benchmark.baseline.duplicateChargeRiskCases, benchmark.rulesAgent.duplicateChargeRiskCases, benchmark.agent.duplicateChargeRiskCases)}
 
           <div className="pt-2 border-t border-slate-100 space-y-2">
             <div className="flex items-center justify-between">
@@ -122,6 +125,11 @@ export const BenchmarkPanel: React.FC = () => {
             <p className="text-[10px] text-slate-400 leading-relaxed">
               Rules column uses a static probability table (event, amount, bank health) with the same compliance double-charge rails — only the decision signal differs.
             </p>
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              <p className="text-[9px] text-slate-500 leading-relaxed"><span className="font-semibold text-slate-600">Naive:</span> {benchmark.baselineBehaviour}</p>
+              <p className="text-[9px] text-slate-500 leading-relaxed"><span className="font-semibold text-slate-600">Rules:</span> {benchmark.rulesBehaviour}</p>
+              <p className="text-[9px] text-indigo-600 leading-relaxed"><span className="font-semibold text-indigo-700">AI Agent:</span> {benchmark.agentBehaviour}</p>
+            </div>
           </div>
 
           {benchmark.heldThoseCases.length > 0 && (

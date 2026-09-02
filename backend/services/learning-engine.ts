@@ -248,19 +248,9 @@ export function buildEvidenceExamples(cases: RecoveryCase[]): string[] {
   return out;
 }
 
-export function getLearningMetrics(outcomes: RecoveryLearningOutcome[]): LearningMetrics {
+export function getLearningMetrics(outcomes: RecoveryLearningOutcome[]): LearningMetrics | null {
   if (outcomes.length === 0) {
-    return {
-      casesLearnedFrom: 0,
-      predictionAccuracyPct: 0,
-      falsePositives: 0,
-      falseNegatives: 0,
-      avgPredictedPct: 0,
-      calibration: [],
-      channelEffectiveness: [],
-      correctedExamples: [],
-      mintedAt: new Date().toISOString()
-    };
+    return null;
   }
 
   const correctCount = outcomes.filter(o =>
