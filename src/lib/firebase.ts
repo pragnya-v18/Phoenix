@@ -20,17 +20,21 @@ const firebaseConfig = {
 };
 
 const firestoreDatabaseId = import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || '';
+const hasFirebase = !!firebaseConfig.apiKey;
 
 // Initialize Firebase App instance safely
-export const firebaseApp = getApps().length === 0 
-  ? initializeApp(firebaseConfig) 
-  : getApp();
+export const firebaseApp = hasFirebase
+  ? (getApps().length === 0 ? initializeApp(firebaseConfig) : getApp())
+  : null;
 
-export const db = firestoreDatabaseId
-  ? getFirestore(firebaseApp, firestoreDatabaseId)
-  : getFirestore(firebaseApp);
-export const auth = getAuth(firebaseApp);
-export const googleAuthProvider = new GoogleAuthProvider();
+export const db = hasFirebase && firebaseApp
+  ? (firestoreDatabaseId
+      ? getFirestore(firebaseApp, firestoreDatabaseId)
+      : getFirestore(firebaseApp))
+  : null;
+
+export const auth = hasFirebase && firebaseApp ? getAuth(firebaseApp) : null;
+export const googleAuthProvider = hasFirebase ? new GoogleAuthProvider() : null;
 
 export enum OperationType {
   CREATE = 'create',
@@ -62,12 +66,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+      userId: auth?.currentUser?.uid ?? null,
+      email: auth?.currentUser?.email ?? null,
+      emailVerified: auth?.currentUser?.emailVerified ?? null,
+      isAnonymous: auth?.currentUser?.isAnonymous ?? null,
+      tenantId: auth?.currentUser?.tenantId ?? null,
+      providerInfo: auth?.currentUser?.providerData?.map(provider => ({
         providerId: provider.providerId,
         email: provider.email,
       })) || []
@@ -81,6 +85,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 // Connection tester on boot
 export async function testFirestoreConnection(): Promise<boolean> {
+  if (!db) return false;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;

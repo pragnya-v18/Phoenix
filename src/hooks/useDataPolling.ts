@@ -76,15 +76,18 @@ export function useDataPolling(): UseDataPollingReturn {
 
   // Auth listener & Firebase connection
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-    });
+    let unsubscribe: (() => void) | undefined;
+    if (auth) {
+      unsubscribe = onAuthStateChanged(auth, (user) => {
+        setCurrentUser(user);
+      });
+    }
 
     testFirestoreConnection().then((ok) => {
       setFirebaseConnected(ok);
     });
 
-    return () => unsubscribe();
+    return () => unsubscribe?.();
   }, []);
 
   // Fetch all initial data + set up polling + SSE

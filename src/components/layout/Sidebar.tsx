@@ -46,6 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const degradedBanks = bankHealth.filter(b => b.status !== 'HEALTHY');
 
   const handleSignIn = async () => {
+    if (!auth || !googleAuthProvider) return;
     try {
       await signInWithPopup(auth, googleAuthProvider);
     } catch (err) {
@@ -54,6 +55,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const handleSignOut = async () => {
+    if (!auth) return;
     try {
       await signOut(auth);
     } catch (err) {
