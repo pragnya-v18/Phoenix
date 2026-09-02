@@ -2,7 +2,7 @@
  * Pipeline and case locking utilities for RecoverFlow AI
  */
 
-import { RecoveryCase, AuditLogEntry } from '../../src/types/index.js';
+import { RecoveryCase } from '../../src/types/index.js';
 import { db } from '../repositories/db.js';
 
 // Per-case pipeline lock to prevent duplicate concurrent executions

@@ -11,7 +11,9 @@ import {
   RootCauseForensicsCard,
   CasesTriageTable,
   RecoveryPipeline,
-  BankRadarCard
+  BankRadarCard,
+  BenchmarkPanel,
+  LearningIntelligencePanel
 } from './dashboard';
 
 interface ExecutiveDashboardProps {
@@ -108,6 +110,12 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
         <RootCauseForensicsCard rootCauses={rootCauses} />
         <BankRadarCard bankHealth={bankHealth} onNavigateTab={onNavigateTab} />
       </div>
+
+      {/* 4b. Baseline Benchmark */}
+      <BenchmarkPanel />
+
+      {/* 4c. Recovery Intelligence Feedback Loop */}
+      <LearningIntelligencePanel />
 
       {/* 5. Pipeline Workflows */}
       <CheckoutAbandonmentPanel metrics={kpis?.checkoutMetrics} />

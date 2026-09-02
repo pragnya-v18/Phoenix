@@ -21,7 +21,7 @@ export interface UseDataPollingReturn {
   isLoading: boolean;
   currentUser: FirebaseUser | null;
   firebaseConnected: boolean;
-  refreshData: () => Promise<void>;
+  refreshData: () => Promise<RecoveryCase[]>;
 }
 
 export function useDataPolling(): UseDataPollingReturn {
@@ -33,7 +33,7 @@ export function useDataPolling(): UseDataPollingReturn {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [firebaseConnected, setFirebaseConnected] = useState<boolean>(false);
 
-  const refreshData = useCallback(async () => {
+  const refreshData = useCallback(async (): Promise<RecoveryCase[]> => {
     try {
       const results = await Promise.allSettled([
         fetch('/api/cases').then(r => r.ok ? r.json() : null),
@@ -44,9 +44,11 @@ export function useDataPolling(): UseDataPollingReturn {
 
       const [casesRes, kpisRes, bankRes, auditsRes] = results;
 
+      let freshCases: RecoveryCase[] = [];
       if (casesRes.status === 'fulfilled' && casesRes.value) {
         const casesData = casesRes.value;
-        setCases(Array.isArray(casesData) ? casesData : (casesData.cases || []));
+        freshCases = Array.isArray(casesData) ? casesData : (casesData.cases || []);
+        setCases(freshCases);
       }
 
       if (kpisRes.status === 'fulfilled' && kpisRes.value) {
@@ -64,9 +66,11 @@ export function useDataPolling(): UseDataPollingReturn {
       }
 
       setIsLoading(false);
+      return freshCases;
     } catch (err) {
       console.warn('RecoverFlow telemetry sync notice (retrying automatically):', err);
       setIsLoading(false);
+      return [];
     }
   }, []);
 

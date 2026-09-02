@@ -16,6 +16,8 @@ import { db } from '../repositories/db.js';
 import { RazorpayService } from '../razorpay.js';
 import { IdempotencyService } from '../services/idempotency.js';
 import { FinancialAccountingEngine } from '../services/financials.js';
+import { ExpectedValueEngine } from '../services/ev-optimizer.js';
+import { applyHistoricalEvidence } from '../services/learning-engine.js';
 import {
   RecoveryCase,
   AuditLogEntry,
@@ -312,7 +314,12 @@ export class AgentSupervisor {
     // NODE 3: STRATEGY AGENT (Gemini Expected-Value Economic Planner)
     // =============================================================
     const t2 = Date.now();
-    const strategy = await this.runStrategyAgent(recoveryCase, diagnosis);
+    const strategy = applyHistoricalEvidence(
+      await this.runStrategyAgent(recoveryCase, diagnosis),
+      recoveryCase,
+      db.getAllLearningOutcomes()
+    );
+    ExpectedValueEngine.attachEV(strategy, recoveryCase.amount, recoveryCase.sourceEvent.method, recoveryCase.amount >= 25000);
     recoveryCase.strategy = strategy;
 
     // Override channel if fallback was specified (e.g., payment_link.expired retry)
@@ -372,7 +379,7 @@ export class AgentSupervisor {
         rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
         model: 'gemini-2.0-flash',
         latencyMs: Date.now() - t3,
-        tokensUsed: 220
+        tokensUsed: compliance.tokensUsed
       });
 
       return { updatedCase: recoveryCase, traces };
@@ -1261,7 +1268,12 @@ Return ONLY JSON:
     // CHECKOUT NODE 3: Checkout Recovery Strategy
     // =============================================================
     const t2 = Date.now();
-    const strategy = this.runCheckoutStrategyAgent(recoveryCase, diagnosis);
+    const strategy = applyHistoricalEvidence(
+      this.runCheckoutStrategyAgent(recoveryCase, diagnosis),
+      recoveryCase,
+      db.getAllLearningOutcomes()
+    );
+    ExpectedValueEngine.attachEV(strategy, recoveryCase.amount, recoveryCase.sourceEvent.method, recoveryCase.amount >= 25000);
     recoveryCase.strategy = strategy;
     await safePersistCase(recoveryCase);
 
@@ -1315,7 +1327,7 @@ Return ONLY JSON:
         rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
         model: 'gemini-2.0-flash',
         latencyMs: Date.now() - t3,
-        tokensUsed: 220
+        tokensUsed: compliance.tokensUsed
       });
 
       return { updatedCase: recoveryCase, traces };
@@ -1865,7 +1877,12 @@ Return ONLY JSON:
     // RECEIVABLES NODE 3: Strategy & Recovery Action
     // =============================================================
     const t2 = Date.now();
-    const strategy = this.runReceivablesStrategyAgent(recoveryCase, diagnosis);
+    const strategy = applyHistoricalEvidence(
+      this.runReceivablesStrategyAgent(recoveryCase, diagnosis),
+      recoveryCase,
+      db.getAllLearningOutcomes()
+    );
+    ExpectedValueEngine.attachEV(strategy, recoveryCase.amount, recoveryCase.sourceEvent.method, recoveryCase.amount >= 25000);
     recoveryCase.strategy = strategy;
     await safePersistCase(recoveryCase);
 
@@ -1919,7 +1936,7 @@ Return ONLY JSON:
         rationale: `Violations detected: ${compliance.violations.join(', ')}. Guardrail enforced.`,
         model: 'gemini-2.0-flash',
         latencyMs: Date.now() - t3,
-        tokensUsed: 220
+        tokensUsed: compliance.tokensUsed
       });
 
       return { updatedCase: recoveryCase, traces };

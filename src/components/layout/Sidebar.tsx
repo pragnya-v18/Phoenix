@@ -270,7 +270,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* AI Engine Badge */}
       {!collapsed && (
         <div className="px-5 pb-3 text-center">
-          <span className="text-[9px] text-slate-600 font-medium">Powered by Gemini 3.7 Flash</span>
+          <span className="text-[9px] text-slate-600 font-medium">Powered by Gemini 2.0 Flash</span>
         </div>
       )}
     </aside>

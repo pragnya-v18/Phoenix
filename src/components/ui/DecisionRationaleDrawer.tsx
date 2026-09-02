@@ -100,7 +100,7 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
             <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
               <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${(caseItem.diagnosis?.confidenceScore || 0) * 100}%` }} />
             </div>
-            <p className="text-[9px] text-slate-500 mt-1">Gemini 3.7 Flash classification confidence based on error code, bank health, and historical patterns</p>
+            <p className="text-[9px] text-slate-500 mt-1">Gemini 2.0 Flash classification confidence based on error code, bank health, and historical patterns</p>
           </div>
 
           {/* Strategy Confidence */}
@@ -135,53 +135,143 @@ export const DecisionRationaleDrawer: React.FC<DecisionRationaleDrawerProps> = (
     },
     {
       id: 'economic',
-      label: 'Economic Optimization',
+      label: 'Action Economics (Expected Value)',
       icon: Coins,
       content: (
         <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2 text-[10px]">
-            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
-              <span className="text-slate-400">Transaction Value</span>
-              <div className="font-bold text-slate-900">{formatINR(caseItem.amount)}</div>
-            </div>
-            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
-              <span className="text-slate-400">Offered Discount</span>
-              <div className="font-bold text-emerald-700">{caseItem.strategy?.offeredDiscountPct || 0}%</div>
-            </div>
-            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
-              <span className="text-slate-400">Incentive Cost</span>
-              <div className="font-bold text-amber-700">{formatINR(caseItem.strategy?.calculatedIncentiveINR || 0)}</div>
-            </div>
-            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
-              <span className="text-slate-400">Expected Recovery Prob</span>
-              <div className="font-bold text-indigo-700">{((caseItem.strategy?.expectedRecoveryProbability || 0.78) * 100).toFixed(0)}%</div>
-            </div>
-            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
-              <span className="text-slate-400">Expected Net Value</span>
-              <div className="font-bold text-emerald-700">
-                {formatINR(caseItem.amount * (caseItem.strategy?.expectedRecoveryProbability || 0.78) - (caseItem.strategy?.calculatedIncentiveINR || 0))}
+          {caseItem.strategy?.ev ? (
+            <>
+              {/* EV Verdict */}
+              <div className={`p-2.5 rounded-lg border ${caseItem.strategy.ev.isNegativeEV ? 'bg-rose-50/50 border-rose-200/70' : 'bg-emerald-50/50 border-emerald-200/70'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-700">Expected Value</span>
+                  <span className={`font-mono text-sm font-bold ${caseItem.strategy.ev.isNegativeEV ? 'text-rose-700' : 'text-emerald-700'}`}>
+                    {formatINR(caseItem.strategy.ev.expectedValueINR)}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${
+                    caseItem.strategy.ev.isNegativeEV
+                      ? 'bg-rose-100 text-rose-700 border-rose-200'
+                      : 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                  }`}>
+                    {caseItem.strategy.ev.isNegativeEV ? 'REJECTED — negative EV' : 'APPROVED — positive EV'}
+                  </span>
+                  <span className="text-[9px] text-slate-400">deterministic guardrail stage</span>
+                </div>
+              </div>
+
+              {/* EV Breakdown */}
+              <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/60">
+                <div className="text-[10px] font-bold text-slate-700 mb-1.5">EV Breakdown · {Math.round(caseItem.strategy.ev.successProbability * 100)}% P × {formatINR(caseItem.strategy.ev.netRecoverableINR)} net</div>
+                <div className="space-y-1 text-[10px]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Gross expected capture</span>
+                    <span className="font-mono font-semibold text-emerald-700">+{formatINR(caseItem.strategy.ev.grossExpectedINR)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Incentive cost</span>
+                    <span className="font-mono font-semibold text-rose-600">−{formatINR(caseItem.strategy.ev.incentiveINR)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">MDR + GST</span>
+                    <span className="font-mono font-semibold text-rose-600">−{formatINR(caseItem.strategy.ev.mdrFeeINR)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Channel ops</span>
+                    <span className="font-mono font-semibold text-rose-600">−{formatINR(caseItem.strategy.ev.opsCostINR)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Customer friction ({caseItem.strategy?.targetChannel})</span>
+                    <span className="font-mono font-semibold text-rose-600">−{formatINR(caseItem.strategy.ev.frictionPenaltyINR)}</span>
+                  </div>
+                </div>
+                <p className="text-[9px] text-slate-500 mt-1.5 leading-relaxed">{caseItem.strategy.ev.rationale}</p>
+              </div>
+            </>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 text-[10px]">
+              <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
+                <span className="text-slate-400">Transaction Value</span>
+                <div className="font-bold text-slate-900">{formatINR(caseItem.amount)}</div>
+              </div>
+              <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
+                <span className="text-slate-400">Offered Discount</span>
+                <div className="font-bold text-emerald-700">{caseItem.strategy?.offeredDiscountPct || 0}%</div>
+              </div>
+              <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
+                <span className="text-slate-400">Incentive Cost</span>
+                <div className="font-bold text-amber-700">{formatINR(caseItem.strategy?.calculatedIncentiveINR || 0)}</div>
+              </div>
+              <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
+                <span className="text-slate-400">Expected Recovery Prob</span>
+                <div className="font-bold text-indigo-700">{((caseItem.strategy?.expectedRecoveryProbability || 0.78) * 100).toFixed(0)}%</div>
               </div>
             </div>
-            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/60">
-              <span className="text-slate-400">ROI Multiplier</span>
-              <div className="font-bold text-violet-700">
-                {caseItem.strategy?.calculatedIncentiveINR ? `${((caseItem.amount * (caseItem.strategy?.expectedRecoveryProbability || 0.78)) / caseItem.strategy.calculatedIncentiveINR).toFixed(1)}x` : 'N/A'}
-              </div>
-            </div>
-          </div>
+          )}
 
           {/* Optimization Explanation */}
           <div className="bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-200/60">
             <p className="text-[10px] text-indigo-800 leading-relaxed">
-              <strong>Optimization Logic:</strong> The strategy optimizer maximizes expected net value = P(recovery) × Amount − Incentive Cost. 
-              The {caseItem.strategy?.offeredDiscountPct || 5}% discount was selected because it balances customer willingness-to-pay 
-              against margin erosion. Channel {caseItem.strategy?.targetChannel || 'WHATSAPP'} was chosen for its {caseItem.strategy?.targetChannel === 'WHATSAPP' ? '82% recovery rate and interactive buttons' : 
+              <strong>Optimization Logic:</strong> EV = P(recovery) × Net Amount − (Incentive + MDR + Ops + Friction).
+              The {caseItem.strategy?.offeredDiscountPct || 5}% incentive was selected because it pays for itself at the
+              estimated {((caseItem.strategy?.expectedRecoveryProbability || 0.78) * 100).toFixed(0)}% recovery probability.
+              Channel {caseItem.strategy?.targetChannel || 'WHATSAPP'} was chosen for its {
+              caseItem.strategy?.targetChannel === 'WHATSAPP' ? '82% recovery rate and interactive buttons' : 
               caseItem.strategy?.targetChannel === 'ACP_A2A' ? '88% autonomous recovery rate and 42ms latency' : 
-              'broad reach and cost efficiency'}.
+              'broad reach and cost efficiency'}. Negative-EV actions are rejected before they reach execution.
             </p>
           </div>
         </div>
       )
+    },
+    {
+      id: 'learning',
+      label: 'Learning Evidence (Predicted vs History)',
+      icon: TrendingUp,
+      content: (() => {
+        const ev = caseItem.strategy?.recoveryEvidence;
+        if (!ev) {
+          return (
+            <div className="text-[10px] text-slate-400 italic p-3 bg-slate-50 rounded-lg border border-slate-200/60">
+              No historical evidence adjustment stamped yet — will appear after ≥3 similar cases have resolved through the feedback loop.
+            </div>
+          );
+        }
+        const stamp = ev.influence.replace(/-/g, ' ');
+        return (
+          <div className="space-y-2">
+            <div className="bg-violet-50/60 p-3 rounded-lg border border-violet-200/60">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold text-violet-800">Historical Evidence · {ev.similarCases} similar cases</span>
+                <span className="text-[9px] font-mono font-semibold text-violet-700">{ev.historicalSuccessRatePct.toFixed(1)}% success</span>
+              </div>
+              <div className="space-y-1 text-[10px]">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Raw AI predicted probability</span>
+                  <span className="font-mono font-semibold text-slate-800">{ev.rawProbability.toFixed(0)}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">History-adjusted probability</span>
+                  <span className="font-mono font-bold text-violet-700">{ev.adjustedProbability.toFixed(0)}%</span>
+                </div>
+              </div>
+            </div>
+            {ev.recommendedChannel && (
+              <div className="bg-indigo-50/60 p-2.5 rounded-lg border border-indigo-200/70">
+                <p className="text-[10px] text-indigo-900 leading-relaxed">
+                  <strong>Channel recommendation:</strong> historical outcomes favor{' '}
+                  <span className="font-mono font-bold">{ev.recommendedChannel}</span> for this profile (currently routed to{' '}
+                  <span className="font-mono font-semibold">{caseItem.strategy?.targetChannel}</span>). Human operator can override after compliance review.
+                </p>
+              </div>
+            )}
+            <p className="text-[9px] text-slate-400 leading-relaxed">
+              Outcome stamp: {stamp}. Evidence adjusts only the decision signal — compliance, settlement guard and EV verdicts still run unchanged.
+            </p>
+          </div>
+        );
+      })()
     },
     {
       id: 'compliance',

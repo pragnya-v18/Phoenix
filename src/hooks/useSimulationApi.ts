@@ -28,7 +28,7 @@ export interface UseSimulationApiReturn {
 }
 
 export function useSimulationApi(
-  refreshData: () => Promise<void>,
+  refreshData: () => Promise<RecoveryCase[]>,
   setCases: React.Dispatch<React.SetStateAction<RecoveryCase[]>>,
   setKpis: React.Dispatch<React.SetStateAction<any>>,
   setBankHealth: React.Dispatch<React.SetStateAction<any>>,
@@ -234,13 +234,15 @@ export function useSimulationApi(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ intent, payload })
       });
-      await refreshData();
-      const updated = cases.find(c => c.caseId === caseId);
+      // Use the freshly-fetched cases returned by refreshData — avoids the
+      // stale-closure bug where `cases` still holds the pre-refresh snapshot.
+      const fresh = await refreshData();
+      const updated = fresh.find(c => c.caseId === caseId);
       if (updated) setSelectedCase(updated);
     } catch (err) {
       console.error('Error transmitting ACP message:', err);
     }
-  }, [refreshData, cases, setSelectedCase]);
+  }, [refreshData, setSelectedCase]);
 
   const humanAction = useCallback(async (caseId: string, action: 'APPROVE' | 'DISMISS', discountPct?: number, notes?: string, overrideChannel?: ChannelType) => {
     try {

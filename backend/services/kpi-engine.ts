@@ -28,9 +28,27 @@ const netRecoveredAmount = (c: RecoveryCase): number => {
   return Math.max(0, gross - refund);
 };
 
+/**
+ * Reconciliation methods that require an independent gateway-settlement signal
+ * (real Razorpay webhook) before revenue is counted. Everything else is
+ * merchant-reported or simulated — counted as PROJECTED, never VERIFIED.
+ */
+const VERIFIED_RECONCILIATION_METHODS = new Set([
+  'PAYMENT_LINK_PAID_WEBHOOK',
+  'PAYMENT_CAPTURED_WEBHOOK',
+  'VOICE_LINK_PAID_WEBHOOK'
+]);
+
+const isVerifiedRecovery = (c: RecoveryCase): boolean => {
+  const method = c.outcome?.reconciliationMethod;
+  return method !== undefined && VERIFIED_RECONCILIATION_METHODS.has(method);
+};
+
 export function computeKPIs(allCases: RecoveryCase[]): ExecutiveKPIs {
   let totalRevenueAtRisk = 0;
   let totalRevenueRecovered = 0;
+  let verifiedRecoveredINR = 0;
+  let projectedRecoveredINR = 0;
   let recoveredCount = 0;
   let failedCount = 0;
   let cooldownProtectedCount = 0;
@@ -146,6 +164,11 @@ export function computeKPIs(allCases: RecoveryCase[]): ExecutiveKPIs {
       const mdrFee = c.outcome?.estimatedMdrFeeINR !== undefined ? c.outcome.estimatedMdrFeeINR : mdrCalc.totalMdrFeeINR;
 
       totalRevenueRecovered += recAmount;
+      if (isVerifiedRecovery(c)) {
+        verifiedRecoveredINR += recAmount;
+      } else {
+        projectedRecoveredINR += recAmount;
+      }
       totalIncentiveCost += incCost;
       totalRecoveryTimeSec += timeSec;
       totalMdrFees += mdrFee;
@@ -483,6 +506,8 @@ export function computeKPIs(allCases: RecoveryCase[]): ExecutiveKPIs {
   return {
     totalRevenueAtRiskINR: Math.round(totalRevenueAtRisk),
     totalRevenueRecoveredINR: Math.round(totalRevenueRecovered),
+    verifiedRecoveredINR: Math.round(verifiedRecoveredINR),
+    projectedRecoveredINR: Math.round(projectedRecoveredINR),
     recoveryRatePercentage: Number(recoveryRate.toFixed(1)),
 
     totalCasesCount: allCases.length,

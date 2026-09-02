@@ -9,3 +9,5 @@ export { RootCauseForensicsCard } from './RootCauseForensicsCard';
 export { CasesTriageTable } from './CasesTriageTable';
 export { RecoveryPipeline } from './AgentFunnelCard';
 export { BankRadarCard } from './BankRadarCard';
+export { BenchmarkPanel } from './BenchmarkPanel';
+export { LearningIntelligencePanel } from './LearningIntelligencePanel';

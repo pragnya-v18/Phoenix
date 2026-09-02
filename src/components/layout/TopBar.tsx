@@ -259,8 +259,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                           return (
                             <button
                               key={iIdx}
+                              disabled={isSimulating}
                               onClick={() => { item.action(); closeMenu(); }}
-                              className={`w-full text-left p-2.5 ${item.batchBg} hover:${item.batchHoverBg} rounded-xl text-xs transition-colors flex flex-col gap-0.5 border ${item.batchBorder}`}
+                              className={`w-full text-left p-2.5 ${item.batchBg} hover:${item.batchHoverBg} rounded-xl text-xs transition-colors flex flex-col gap-0.5 border ${item.batchBorder} disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                               <div className="flex items-center justify-between">
                                 <span className={`font-bold ${item.batchTextColor} flex items-center gap-1`}>
@@ -280,8 +281,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                         return (
                           <button
                             key={iIdx}
+                            disabled={isSimulating}
                             onClick={() => { item.action(); closeMenu(); }}
-                            className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5"
+                            className="w-full text-left p-2.5 hover:bg-slate-50 rounded-xl text-xs transition-colors flex flex-col gap-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-slate-900">{item.label}</span>

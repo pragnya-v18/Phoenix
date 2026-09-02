@@ -5,7 +5,7 @@
 
 import { db } from '../repositories/db.js';
 import { pipelineJobQueue } from '../queues/job-queue.js';
-import { RecoveryCase, PaymentMethod, ChannelType, CheckoutStage, CheckoutProfile, InvoiceDPD } from '../../src/types/index.js';
+import { RecoveryCase, PaymentMethod, CheckoutStage, InvoiceDPD } from '../../src/types/index.js';
 
 export class SimulationService {
   /**

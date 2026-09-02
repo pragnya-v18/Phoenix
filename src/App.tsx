@@ -22,6 +22,7 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [timeRange, setTimeRange] = useState<string>('24H');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [isSending, setIsSending] = useState<boolean>(false);
 
   const dataPolling = useDataPolling();
   const simApi = useSimulationApi(
@@ -156,8 +157,16 @@ export function App() {
                   cases={displayedCases}
                   selectedCase={selectedCase}
                   onSelectCase={(c) => setSelectedCase(c)}
-                  onSendNegotiation={simApi.sendNegotiation}
-                  isSending={false}
+                  onSendNegotiation={async (caseId, intent, payload) => {
+                    if (isSending) return;
+                    setIsSending(true);
+                    try {
+                      await simApi.sendNegotiation(caseId, intent, payload);
+                    } finally {
+                      setIsSending(false);
+                    }
+                  }}
+                  isSending={isSending}
                 />
               </motion.div>
             )}

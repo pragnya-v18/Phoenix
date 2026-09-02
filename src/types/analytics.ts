@@ -50,6 +50,10 @@ export interface RootCauseRecoveryMetric {
 export interface ExecutiveKPIs {
   totalRevenueAtRiskINR: number;
   totalRevenueRecoveredINR: number;
+  /** Revenue recovered AND independently settled via a live Razorpay webhook. */
+  verifiedRecoveredINR: number;
+  /** Revenue recovered via merchant-reported/simulated signals (not yet gateway-verified). */
+  projectedRecoveredINR: number;
   recoveryRatePercentage: number;
   totalCasesCount: number;
   activeCasesCount: number;

@@ -93,9 +93,11 @@ export interface StrategyRecord {
   reasoning: string;
   expectedRecoveryProbability: number;
   scheduledExecutionAt: string;
+  ev?: import('./ev').ExpectedValueAssessment | null;
   generatedMessageCopy?: string;
   whatsAppInteractivePayload?: import('./protocol').WhatsAppInteractivePayload;
   confidenceScore?: number;
+  recoveryEvidence?: import('./learning').RecoveryEvidenceStamp;
   antiAbuseEnforced?: boolean;
   antiAbuseReason?: string;
   tokensUsed: number;
@@ -146,6 +148,15 @@ export interface RecoveryCase {
     bankCode?: string;
     switchHealthPct?: number;
     reason?: string;
+  };
+  settlementGuard?: {
+    status: 'unverified' | 'settled' | 'not_found';
+    blocked: boolean;
+    originalPaymentId?: string;
+    orderId?: string;
+    checkedAt?: string;
+    source?: 'webhook' | 'rest-check' | 'acceptable';
+    verdict?: string;
   };
   createdAt: string;
   updatedAt: string;

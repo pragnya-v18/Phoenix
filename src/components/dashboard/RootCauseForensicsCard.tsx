@@ -15,7 +15,7 @@ export const RootCauseForensicsCard: React.FC<RootCauseForensicsCardProps> = ({ 
           <span>AI Root Cause Forensics & Resolution Rate</span>
         </h3>
         <span className="text-[10px] font-bold text-violet-700 bg-violet-50 px-2 py-0.5 rounded border border-violet-200">
-          Gemini 3.7 Flash
+          Gemini 2.0 Flash
         </span>
       </div>
       <p className="text-xs text-slate-500 mb-4">

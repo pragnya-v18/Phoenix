@@ -18,8 +18,22 @@ interface KpiCardsSectionProps {
   cases: RecoveryCase[];
 }
 
+interface KpiCard {
+  label: string;
+  value: string | number;
+  icon: React.FC<{ className?: string }>;
+  color: string;
+  bg: string;
+  border: string;
+  footer?: string;
+  footerColor?: string;
+  footerNode?: React.ReactNode;
+}
+
 export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({ kpis, cases }) => {
   const totalRecovered = kpis?.totalRevenueRecoveredINR || cases.filter(c => c.status === 'RECOVERED').reduce((acc, c) => acc + (c.outcome?.recoveredAmount || c.amount), 0);
+  const verifiedRecovered = kpis?.verifiedRecoveredINR ?? totalRecovered;
+  const projectedRecovered = kpis?.projectedRecoveredINR ?? Math.max(0, totalRecovered - verifiedRecovered);
   const recoveryRate = kpis?.recoveryRatePercentage || 0;
   const activeCases = kpis?.activeCasesCount || cases.filter(c => c.status !== 'RECOVERED' && c.status !== 'FAILED' && c.status !== 'DISMISSED').length;
   const aiDecisions = cases.filter(c => c.diagnosis || c.strategy).length;
@@ -30,7 +44,9 @@ export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({ kpis, cases })
   const netSaved = kpis?.netRevenueSavedINR || 0;
   const efficiency = totalCost > 0 ? (netSaved / totalCost).toFixed(1) : '0.0';
 
-  const cards = [
+  const verifiedWide = totalRecovered > 0 ? (verifiedRecovered / totalRecovered) * 100 : 0;
+
+  const cards: KpiCard[] = [
     {
       label: 'Revenue Recovered',
       value: formatINR(totalRecovered),
@@ -38,8 +54,19 @@ export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({ kpis, cases })
       color: 'text-emerald-600',
       bg: 'bg-emerald-50',
       border: 'border-l-emerald-500',
-      footer: `${cases.filter(c => c.status === 'RECOVERED').length} settled`,
-      footerColor: 'text-emerald-700'
+      footer: `${cases.filter(c => c.status === 'RECOVERED').length} settled cases`,
+      footerColor: 'text-emerald-700',
+      footerNode: (
+        <div>
+          <div className="flex justify-between text-[9px] font-medium mb-1">
+            <span className="text-emerald-700">Verified {formatINR(verifiedRecovered)}</span>
+            <span className="text-slate-400">Projected {formatINR(projectedRecovered)}</span>
+          </div>
+          <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full bg-emerald-500" style={{ width: `${Math.max(1, verifiedWide)}%` }} />
+          </div>
+        </div>
+      )
     },
     {
       label: 'Recovery Rate',
@@ -68,7 +95,7 @@ export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({ kpis, cases })
       color: 'text-violet-600',
       bg: 'bg-violet-50',
       border: 'border-l-violet-500',
-      footer: 'Gemini 3.7 Flash',
+      footer: 'Gemini 2.0 Flash',
       footerColor: 'text-violet-700'
     },
     {
@@ -129,7 +156,9 @@ export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({ kpis, cases })
               {card.value}
             </div>
             <div className="mt-2 pt-2 border-t border-slate-100">
-              <span className={`text-[10px] font-medium ${card.footerColor}`}>{card.footer}</span>
+              {card.footerNode || (
+                <span className={`text-[10px] font-medium ${card.footerColor}`}>{card.footer}</span>
+              )}
             </div>
           </div>
         );

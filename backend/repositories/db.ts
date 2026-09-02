@@ -21,10 +21,12 @@ import {
   ExecutiveKPIs,
   ACPMessage,
   CaseStatus,
-  DeadLetterPayment
+  DeadLetterPayment,
+  RecoveryLearningOutcome
 } from '../../src/types/index.js';
 import { pipelineJobQueue } from '../queues/job-queue.js';
 import { computeKPIs } from '../services/kpi-engine.js';
+import { buildLearningOutcome } from '../services/learning-engine.js';
 import { generateSeedData } from '../seed/seed-data.js';
 
 // Read config safely
@@ -81,6 +83,7 @@ export class FirestoreDatabase {
   private auditLogsCache: Map<string, AuditLogEntry[]> = new Map();
   private bankHealthCache: Map<string, BankHealthMetric> = new Map();
   private deadLetterCache: Map<string, DeadLetterPayment> = new Map();
+  private learningCache: Map<string, RecoveryLearningOutcome> = new Map();
   
   // O(1) indexes for webhook case lookups (M1)
   private paymentIdIndex: Map<string, string> = new Map();   // paymentId → caseId
@@ -90,6 +93,7 @@ export class FirestoreDatabase {
   private readonly MAX_CASES_CACHE = 2000;
   private readonly MAX_AUDIT_CACHE = 2000;
   private readonly MAX_DEAD_LETTER_CACHE = 500;               // M2: dead-letter cap
+  private readonly MAX_LEARNING_CACHE = 2000;                 // Learning-outcome cap
   private readonly DEAD_LETTER_TTL_MS = 7 * 24 * 60 * 60 * 1000; // M2: 7 days
 
   private evictCache<K, V>(map: Map<K, V>, maxSize: number) {
@@ -157,6 +161,7 @@ export class FirestoreDatabase {
         auditLogs: Array.from(this.auditLogsCache.entries()),
         bankHealth: Array.from(this.bankHealthCache.entries()),
         deadLetter: Array.from(this.deadLetterCache.entries()),
+        learning: Array.from(this.learningCache.entries()),
         lastSaved: new Date().toISOString()
       };
 
@@ -244,6 +249,9 @@ export class FirestoreDatabase {
       if (Array.isArray(data.deadLetter)) {
         this.deadLetterCache = new Map(data.deadLetter);
       }
+      if (Array.isArray(data.learning)) {
+        this.learningCache = new Map(data.learning);
+      }
       return this.casesCache.size > 0;
     } catch (err) {
       console.warn(`[Storage] Failed to load ${path.basename(filePath)}:`, err);
@@ -261,6 +269,10 @@ export class FirestoreDatabase {
       this.seedLocalDefaults();
       this.saveToDisk();
     }
+
+    // Recovery Intelligence Feedback Loop: bootstrap learning from terminal
+    // cases present in whichever state we just loaded/seeded.
+    this.backfillLearningOutcomes();
 
     // Test Firestore connectivity asynchronously without blocking app readiness
     if (this.firestore) {
@@ -816,6 +828,59 @@ export class FirestoreDatabase {
   }
 
   // =========================================================================
+  // Recovery Intelligence Feedback Loop (predicted vs actual outcomes)
+  // =========================================================================
+  /**
+   * Store a terminal learning outcome (idempotent by caseId — repeated
+   * reconciliation webhooks simply overwrite the same record).
+   */
+  public setLearningOutcome(outcome: RecoveryLearningOutcome): void {
+    this.learningCache.set(outcome.caseId, outcome);
+    this.evictCache(this.learningCache, this.MAX_LEARNING_CACHE);
+    this.saveToDisk();
+  }
+
+  public getLearningOutcome(caseId: string): RecoveryLearningOutcome | undefined {
+    return this.learningCache.get(caseId);
+  }
+
+  public getAllLearningOutcomes(): RecoveryLearningOutcome[] {
+    return Array.from(this.learningCache.values());
+  }
+
+  /**
+   * Terminal-transition hook: capture a case's outcome for the learning loop.
+   * No-ops when the case carried no strategy (nothing was actually attempted),
+   * which automatically excludes settlement-guard-blocked cases.
+   */
+  public recordCaseOutcome(recoveryCase: RecoveryCase): RecoveryLearningOutcome | undefined {
+    const outcome = buildLearningOutcome(recoveryCase);
+    if (outcome) this.setLearningOutcome(outcome);
+    return outcome;
+  }
+
+  /**
+   * Bootstrap the learning store from any terminal cases that already carry a
+   * strategy (fresh seed OR restored snapshot). Honest derivation — the loop
+   * starts with the experience already present in the stored case set.
+   */
+  private backfillLearningOutcomes(): void {
+    if (this.learningCache.size > 0) return;
+    let added = 0;
+    for (const c of this.casesCache.values()) {
+      const outcome = buildLearningOutcome(c);
+      if (outcome && !this.learningCache.has(c.caseId)) {
+        this.learningCache.set(outcome.caseId, outcome);
+        added++;
+      }
+    }
+    if (added > 0) {
+      this.evictCache(this.learningCache, this.MAX_LEARNING_CACHE);
+      this.saveToDisk();
+    }
+  }
+
+  // =========================================================================
   // Initial Dataset Seeding
   // =========================================================================
   private seedLocalDefaults() {
@@ -834,6 +899,21 @@ export class FirestoreDatabase {
       caseLogs.push(log);
       this.auditLogsCache.set(log.caseId, caseLogs);
     }
+  }
+
+  /**
+   * TEST-ONLY reset: clears all in-memory caches so each test starts from a
+   * clean, empty store. Does NOT touch disk or Firestore — safe for unit runs.
+   */
+  public resetForTesting(): void {
+    this.casesCache.clear();
+    this.auditLogsCache.clear();
+    this.deadLetterCache.clear();
+    this.learningCache.clear();
+    this.paymentIdIndex.clear();
+    this.orderIdIndex.clear();
+    this.paymentLinkIdIndex.clear();
+    this.bankHealthCache.clear();
   }
 }
 

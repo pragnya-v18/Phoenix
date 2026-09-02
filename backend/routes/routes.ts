@@ -11,6 +11,8 @@ import { RazorpayService } from '../razorpay.js';
 import { SimulationService } from '../simulations/simulations.js';
 import { VoiceAgentService } from '../agents/voice-agent.js';
 import { FinancialAccountingEngine } from '../services/financials.js';
+import { BenchmarkService } from '../services/benchmark.js';
+import { getLearningMetrics, similarHistory, buildEvidenceExamples } from '../services/learning-engine.js';
 import { pipelineJobQueue } from '../queues/job-queue.js';
 import { RecoveryCase, CaseStatus } from '../../src/types/index.js';
 
@@ -58,10 +60,17 @@ apiRouter.post('/razorpay/payment-link', async (req: Request, res: Response) => 
 
 // Razorpay 1-Click Settlement Browser Callback & Instant Reconciliation Route
 apiRouter.get('/razorpay/callback', async (req: Request, res: Response) => {
-  const { caseId } = req.query as Record<string, string>;
-  if (caseId) {
+  const rawCaseId = String(req.query.caseId || '').slice(0, 64);
+  // Escape before interpolation — caseId is attacker-controlled URL input.
+  const caseId = rawCaseId
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  if (rawCaseId) {
     try {
-      await RazorpayService.reconcileCaseWithRazorpay(caseId);
+      await RazorpayService.reconcileCaseWithRazorpay(rawCaseId);
     } catch (e) {
       console.warn('Callback reconciliation notice:', e);
     }
@@ -139,6 +148,18 @@ apiRouter.post(['/simulate/batch-stream', '/simulate/batch-failures'], async (re
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Batch simulation failed', details: err?.message || String(err) });
+  }
+});
+
+// Deterministic offline benchmark: baseline (naive retry) vs. agent pipeline projected recovery
+apiRouter.post('/simulate/benchmark', async (req: Request, res: Response) => {
+  const { maxCases } = req.body;
+  try {
+    const cases = db.getAllCases();
+    const run = BenchmarkService.runBenchmark(cases, maxCases || 15);
+    res.json({ success: true, message: 'Benchmark computed (deterministic, offline)', benchmark: run });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Benchmark failed', details: err?.message || String(err) });
   }
 });
 
@@ -305,6 +326,36 @@ apiRouter.get(['/analytics/revenue-evidence', '/analytics/recovery-metrics'], (r
       recentSettledCases: recoveredCasesList.slice(0, 10)
     }
   });
+});
+
+// Recovery Intelligence Feedback Loop — Learning Evidence
+apiRouter.get('/learning/evidence', (req: Request, res: Response) => {
+  try {
+    const caseId = req.query.caseId;
+    if (caseId) {
+      const caseItem = db.getCase(String(caseId));
+      if (!caseItem) return res.status(404).json({ error: `Case ${caseId} not found` });
+      const history = similarHistory(
+        {
+          rootCauseCategory: caseItem.diagnosis?.rootCauseCategory,
+          eventType: caseItem.eventType,
+          riskTier: caseItem.riskTier
+        },
+        db.getAllLearningOutcomes()
+      );
+      return res.json({ success: true, caseId, historicalEvidence: history });
+    }
+
+    const outcomes = db.getAllLearningOutcomes();
+    const metrics = getLearningMetrics(outcomes);
+    res.json({
+      success: true,
+      metrics,
+      evidenceExamples: buildEvidenceExamples(db.getAllCases())
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to compute learning evidence', details: err?.message || String(err) });
+  }
 });
 
 // Trigger full Multi-Agent pipeline execution on a case
@@ -481,6 +532,7 @@ apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'],
               costOfIncentiveINR: currentCase.amount - netAmount
             };
             await db.upsertCase(updated);
+            try { db.recordCaseOutcome(updated); } catch { /* learning is best-effort */ }
 
             await db.addAuditLog({
               caseId,
@@ -502,6 +554,7 @@ apiRouter.post(['/cases/:caseId/human-action', '/cases/:caseId/human-decision'],
       currentCase.status = 'DISMISSED';
       currentCase.humanActionNotes = operatorNotes || notes || 'Dismissed by operator';
       await db.upsertCase(currentCase);
+      try { db.recordCaseOutcome(currentCase); } catch { /* learning is best-effort */ }
 
       await db.addAuditLog({
         caseId,

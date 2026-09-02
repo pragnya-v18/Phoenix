@@ -216,6 +216,56 @@ export class RazorpayService {
    * Master Webhook Ingestion & Event Reconciliation Handler
    * Delegates to extracted handler functions in webhook-handlers.ts
    */
+  /**
+   * Double-charge guard: before ever dispatching a recovery link, verify the
+   * original payment truly failed on the gateway. If Razorpay says it was
+   * captured (delayed settlement / dual-authorization race), the agent must
+   * NOT re-bill the customer — that is how double-charges happen.
+   *
+   * Graceful offline fallback: in sandbox/demo builds (no keys, no id) this
+   * returns `unverified` and stays non-blocking so the pipeline still works.
+   */
+  public static async checkOriginalPaymentStatus(
+    paymentId?: string,
+    orderId?: string
+  ): Promise<{ status: 'settled' | 'failed' | 'not_found' | 'unverified'; blocked: boolean; settledPaymentId?: string; source: string }> {
+    const keyId = this.getKeyId();
+    const keySecret = this.getKeySecret();
+    if (!keyId || !keySecret || (!paymentId && !orderId)) {
+      return { status: 'unverified', blocked: false, source: 'no-credentials' };
+    }
+
+    const authHeader = 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+
+    try {
+      const url = paymentId
+        ? `https://api.razorpay.com/v1/payments/${paymentId}`
+        : `https://api.razorpay.com/v1/orders/${orderId}/payments`;
+      const res = await fetch(url, { headers: { 'Authorization': authHeader } });
+
+      if (!res.ok) {
+        return { status: 'not_found', blocked: false, source: `http-${res.status}` };
+      }
+
+      const data: any = await res.json();
+      const payment = Array.isArray(data) ? data[0] : data;
+      const gatewayStatus = (payment?.status || '').toLowerCase();
+
+      if (gatewayStatus === 'captured' || gatewayStatus === 'authorized') {
+        return {
+          status: 'settled',
+          blocked: true,
+          settledPaymentId: payment?.id,
+          source: 'razorpay-rest'
+        };
+      }
+      return { status: 'failed', blocked: false, source: `gateway-${gatewayStatus || 'failed'}` };
+    } catch (err) {
+      console.warn(`[SettlementGuard] Original-payment status check failed (${err}). Falling open — not blocking.`);
+      return { status: 'unverified', blocked: false, source: 'network-error' };
+    }
+  }
+
   public static async handleWebhookEvent(eventPayload: any, rawEventId?: string): Promise<WebhookResult> {
     const event = eventPayload.event;
     const eventId = rawEventId || eventPayload.id || `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -313,6 +363,7 @@ export class RazorpayService {
               businessInsights: 'Reconciled via active Razorpay REST API status check.'
             };
             await db.upsertCase(caseItem);
+            try { db.recordCaseOutcome(caseItem); } catch { /* learning is best-effort */ }
 
             return {
               caseId,
@@ -346,6 +397,7 @@ export class RazorpayService {
       businessInsights: 'Reconciled on-demand via payment link authorization signal.'
     };
     await db.upsertCase(caseItem);
+    try { db.recordCaseOutcome(caseItem); } catch { /* learning is best-effort */ }
 
     return {
       caseId,

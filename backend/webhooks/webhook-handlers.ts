@@ -8,6 +8,7 @@ import { db } from '../repositories/db.js';
 import { pipelineJobQueue } from '../queues/job-queue.js';
 import { IdempotencyService } from '../services/idempotency.js';
 import { FinancialAccountingEngine } from '../services/financials.js';
+import { RazorpayService } from '../razorpay.js';
 import { RecoveryCase, PaymentMethod, ChannelType } from '../../src/types/index.js';
 
 export interface WebhookResult {
@@ -66,6 +67,40 @@ export async function handlePaymentFailed(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+
+  // Double-charge settlement guard: only dispatch recovery if the original
+  // payment genuinely failed on the gateway. A captured original = case auto-closed.
+  const guard = await RazorpayService.checkOriginalPaymentStatus(payment.id, payment.order_id);
+  if (guard.status === 'settled') {
+    newCase.status = 'DISMISSED';
+    newCase.settlementGuard = {
+      status: 'settled',
+      blocked: true,
+      originalPaymentId: guard.settledPaymentId || payment.id,
+      orderId: payment.order_id,
+      checkedAt: new Date().toISOString(),
+      source: 'rest-check',
+      verdict: 'PAYMENT_ALREADY_SETTLED_BLOCKED_ACTION'
+    };
+    newCase.updatedAt = new Date().toISOString();
+
+    await db.upsertCase(newCase);
+    await db.addAuditLog({
+      caseId: newCase.caseId,
+      agentName: 'Settlement Guard',
+      action: 'PAYMENT_ALREADY_SETTLED_BLOCKED_ACTION',
+      rationale: `payment.failed received for ${payment.id} but live Razorpay check shows the original payment was captured (${guard.settledPaymentId}). Case auto-closed WITHOUT dispatch — double-charge prevented.`,
+      model: 'settlement-guard',
+      latencyMs: 6,
+      tokensUsed: 0
+    });
+
+    return {
+      status: 'PAYMENT_ALREADY_SETTLED_BLOCKED_ACTION',
+      caseId: newCase.caseId,
+      actionTaken: 'Original payment verified as settled on gateway. No recovery dispatch issued — double-charge prevented.'
+    };
+  }
 
   await db.upsertCase(newCase);
 
@@ -145,6 +180,8 @@ export async function handlePaymentLinkPaid(
     };
 
     await db.upsertCase(matchedCase);
+
+    try { db.recordCaseOutcome(matchedCase); } catch { /* learning is best-effort */ }
 
     await db.addAuditLog({
       caseId: matchedCase.caseId,
@@ -249,6 +286,8 @@ export async function handlePaymentCaptured(
     };
 
     await db.upsertCase(matchedCase);
+
+    try { db.recordCaseOutcome(matchedCase); } catch { /* learning is best-effort */ }
 
     await db.addAuditLog({
       caseId: matchedCase.caseId,

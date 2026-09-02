@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Eye, Play, ArrowRight } from 'lucide-react';
+import { Layers, Eye, Play, ArrowRight, ShieldCheck } from 'lucide-react';
 import { RecoveryCase } from '../../types';
 
 interface CasesTriageTableProps {
@@ -115,14 +115,22 @@ export const CasesTriageTable: React.FC<CasesTriageTableProps> = ({
 
                 {/* Status */}
                 <td className="py-3 px-4">
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                    c.status === 'RECOVERED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                    c.status === 'PENDING_APPROVAL' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
-                    c.status === 'NEGOTIATING' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' :
-                    'bg-slate-100 text-slate-700 border border-slate-200'
-                  }`}>
-                    {c.status}
-                  </span>
+                  <div className="flex flex-col items-start gap-1">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                      c.status === 'RECOVERED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                      c.status === 'PENDING_APPROVAL' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                      c.status === 'NEGOTIATING' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' :
+                      'bg-slate-100 text-slate-700 border border-slate-200'
+                    }`}>
+                      {c.status}
+                    </span>
+                    {c.settlementGuard?.blocked && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-50 text-violet-700 border border-violet-200">
+                        <ShieldCheck className="w-3 h-3" />
+                        Double-charge blocked
+                      </span>
+                    )}
+                  </div>
                 </td>
 
                 {/* Action Buttons */}
