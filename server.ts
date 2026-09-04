@@ -1,26 +1,14 @@
-import express, { Request, Response, NextFunction } from 'express';
-import path from 'path';
-import { apiRouter } from './backend/routes/routes.js';
+import { createApp } from './app.js';
 import { pipelineJobQueue } from './backend/queues/job-queue.js';
 import { AgentSupervisor } from './backend/agents/agents.js';
 import { db } from './backend/repositories/db.js';
 import { PipelineJob } from './backend/queues/job-queue.js';
 
 async function startServer() {
-  const app = express();
+  const app = createApp();
   const PORT = 3000;
 
-  // Express JSON parser with raw body buffer preservation for webhook signature verification
-  app.use(express.json({
-    verify: (req: any, _res, buf) => {
-      req.rawBody = buf.toString('utf8');
-    }
-  }));
-
-  // Mount Backend API Router
-  app.use('/api', apiRouter);
-
-  // Vite development middleware or static production serving
+  // Vite development middleware
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -28,20 +16,7 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
-
-  // Global error-handling middleware — catches unhandled route/async errors
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('[Server] Unhandled error:', err);
-    if (res.headersSent) return;
-    res.status(500).json({ error: 'Internal server error', details: err?.message || String(err) });
-  });
 
   // Bug 3 fix: initialize job queue BEFORE app.listen() so no jobs are
   // dropped in the window between accepting connections and starting the processor.
