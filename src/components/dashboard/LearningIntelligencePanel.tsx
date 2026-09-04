@@ -80,8 +80,13 @@ export const LearningIntelligencePanel: React.FC = () => {
         confidence and channel selection for similar future cases — no retraining, no vector DB. Live refresh every 6s.
       </p>
 
-      {error && (
-        <div className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-3">{error}</div>
+      {error && !metrics && (
+        <div className="py-6 text-center">
+          <Target className="w-6 h-6 text-slate-300 mx-auto mb-2" />
+          <p className="text-xs text-slate-400 max-w-[320px] mx-auto">
+            Learning telemetry is warming up — the panel populates as the recovery loop records outcomes for the live case set.
+          </p>
+        </div>
       )}
 
       {!metrics && !error && (

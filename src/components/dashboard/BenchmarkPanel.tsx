@@ -82,8 +82,10 @@ export const BenchmarkPanel: React.FC = () => {
         Deterministic, offline replay of the live case set. No Gemini / gateway calls — projected expected-value model.
       </p>
 
-      {error && (
-        <div className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-3">{error}</div>
+      {error && !benchmark && (
+        <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200/70 rounded-lg px-3 py-2 mb-3">
+          Benchmark engine is warming up — press Run Benchmark again in a moment.
+        </div>
       )}
 
       {!benchmark && !running && (
